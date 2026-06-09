@@ -1,0 +1,14 @@
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+build/
+DerivedData/
+*.xcuserstate
+*.xcuserdatad/
+xcuserdata/
+*.xcscmblueprint
+*.xccheckout
+.swiftpm/
+.build/
+Package.resolved
