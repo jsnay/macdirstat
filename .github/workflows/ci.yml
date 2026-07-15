@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-test:
+    name: Build + test (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: macdirstat
+
+      # The app links the real Rust engine — the seam is tested, never
+      # mocked. Prefer the engine branch matching this branch; fall back
+      # to main.
+      - name: Checkout dirstat-core
+        run: |
+          BRANCH="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
+          git clone --depth 1 --branch "$BRANCH" \
+            https://github.com/jsnay/dirstat-core dirstat-core \
+            || git clone --depth 1 https://github.com/jsnay/dirstat-core dirstat-core
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build engine + app
+        working-directory: macdirstat
+        run: make build DIRSTAT_CORE_DIR=../dirstat-core
+
+      - name: Tests
+        working-directory: macdirstat
+        run: swift test

@@ -12,3 +12,5 @@ xcuserdata/
 .swiftpm/
 .build/
 Package.resolved
+.lib/
+MacDirStat.app/
