@@ -70,6 +70,7 @@ private struct TreemapContent: View {
     private var canvas: some View {
         // Snapshot main-actor state before the closure: with
         // rendersAsynchronously the renderer may run off-main.
+        let rects = self.rects
         let staged = cleanup.stagedNodes
         let isolated = state.isolatedCategory
         let mode = state.colorMode
@@ -82,7 +83,6 @@ private struct TreemapContent: View {
                 labels[rect.node.raw] = model.name(of: rect.node)
             }
         }
-        let rects = self.rects
 
         return Canvas(opaque: false, rendersAsynchronously: true) { context, _ in
             for rect in rects where !rect.isDir {
