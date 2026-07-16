@@ -1,5 +1,43 @@
 import SwiftUI
 
+// =============================================================================
+// FILE: Sources/MacDirStat/Views/CleanupReviewSheet.swift
+// =============================================================================
+//
+// PURPOSE
+//   The one destructive moment in the app (design 1e). Staging (in
+//   CleanupStore) separated *deciding* from *doing*; this sheet is the
+//   single review-and-commit step: list what's staged, show the reclaim
+//   total and per-item regeneration hints, then move everything to Trash
+//   in one action. "Delete Permanently" is deliberately absent — Trash is
+//   the only commit this surface offers.
+//
+// UPSTREAM DEPENDENCIES (what this file consumes)
+//   - Model/CleanupStore.swift: items/total/remove/reviewPresented — the
+//     staged list this sheet reviews; observed directly (@ObservedObject).
+//   - Model/AppState.swift: commitCleanup() — the trash + engine-refresh
+//     orchestration lives there, not in the view.
+//   - Model/Palette.swift: category dots, staged amber, ByteFormat.
+//
+// DOWNSTREAM CONSUMERS (who depends on this file)
+//   - Views/MainView.swift presents this as the cleanup sheet.
+//
+// STRUCTURE
+//   - CleanupReviewSheet: wrapper handing the store to the content view
+//   - CleanupReviewContent: title, reclaim line, staged list, footer
+//     (system-path note, Cancel, Move to Trash)
+//   - StagedRow: one item — dot, name, home-relative parent path, hint
+//     (amber when it's a warning), size, per-item remove (✕)
+//
+// BEHAVIOR & INVARIANTS
+//   - The store is observed directly (the nested-ObservableObject rule):
+//     removing an item re-renders the list and total live.
+//   - `committing` disables the commit button while the async trash loop
+//     runs, preventing double-commits.
+//   - Sizes shown are physical bytes — "Frees N GB" is a promise about
+//     the disk (set at staging time in CleanupStore).
+// =============================================================================
+
 /// The destructive moment (design 1e): review once, commit once — to
 /// Trash, always. Staging separated deciding from doing; this sheet is the
 /// single confirmation. Path-aware hints say what regenerates; the amber
