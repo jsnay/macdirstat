@@ -111,8 +111,10 @@ struct ToolbarRow: View {
     }
 
     private var rootBytes: UInt64? {
-        guard let model = state.model, model.root.isValid else { return nil }
-        return (try? model.info(model.root))?.logical
+        guard let model = state.model, model.root.isValid,
+            let info = try? model.info(model.root)
+        else { return nil }
+        return state.sizeMetric == .physical ? info.physical : info.logical
     }
 }
 
@@ -183,9 +185,10 @@ struct LegendChips: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            ForEach(state.categories.filter { $0.logical > 0 }) { stat in
+            ForEach(state.categories.filter { $0.bytes(state.sizeMetric) > 0 }) { stat in
                 CategoryChip(
                     stat: stat,
+                    bytes: stat.bytes(state.sizeMetric),
                     isIsolated: state.isolatedCategory == stat.category
                 ) {
                     withAnimation(.easeOut(duration: 0.15)) {
@@ -207,6 +210,7 @@ struct LegendChips: View {
 
 private struct CategoryChip: View {
     let stat: CategoryStat
+    let bytes: UInt64
     let isIsolated: Bool
     let action: () -> Void
 
@@ -218,7 +222,7 @@ private struct CategoryChip: View {
                     .frame(width: 8, height: 8)
                 Text(stat.category.label)
                     .foregroundStyle(Color.white.opacity(0.85))
-                Text(ByteFormat.compact(stat.logical))
+                Text(ByteFormat.compact(bytes))
                     .foregroundStyle(.secondary)
             }
             .font(.system(size: 11))
@@ -291,10 +295,13 @@ private struct FooterContent: View {
                             .foregroundStyle(Color(hex: 0x30D158))
                             .transition(.opacity)
                     }
-                    if let selection = state.selection, let model = state.model {
+                    if let selection = state.selection, let model = state.model,
+                        let info = try? model.info(selection)
+                    {
+                        let bytes = state.sizeMetric == .physical ? info.physical : info.logical
                         (Text("selected: ")
                             + Text(
-                                "\(model.name(of: selection)) · \(ByteFormat.compact((try? model.info(selection))?.logical ?? 0))"
+                                "\(model.name(of: selection)) · \(ByteFormat.compact(bytes))"
                             ).bold().foregroundColor(Color.white.opacity(0.8)))
                             .font(.system(size: 11))
                             .foregroundColor(.secondary)
@@ -319,11 +326,13 @@ struct CapacityBar: View {
         GeometryReader { geo in
             HStack(spacing: 0) {
                 if let rec = state.reconciliation, rec.total > 0 {
-                    ForEach(state.categories.filter { $0.logical > 0 }) { stat in
+                    // Physical bytes always: this bar reconciles against the
+                    // real disk capacity, so apparent sizes would overflow it.
+                    ForEach(state.categories.filter { $0.physical > 0 }) { stat in
                         Rectangle()
                             .fill(Palette.color(for: stat.category))
                             .frame(
-                                width: geo.size.width * CGFloat(stat.logical)
+                                width: geo.size.width * CGFloat(stat.physical)
                                     / CGFloat(rec.total))
                     }
                     if rec.unknown > 0 {

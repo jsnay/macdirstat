@@ -121,8 +121,13 @@ struct TypeStat: Identifiable {
 struct CategoryStat: Identifiable {
     let category: KindCategory
     let logical: UInt64
+    let physical: UInt64
     let files: UInt64
     var id: UInt8 { category.rawValue }
+
+    func bytes(_ metric: SizeMetric) -> UInt64 {
+        metric == .physical ? physical : logical
+    }
 }
 
 struct VolumeReconciliation {
@@ -133,7 +138,16 @@ struct VolumeReconciliation {
 }
 
 enum ChildSort: UInt8 {
-    case size = 0, name = 1, items = 2, mtime = 3
+    case size = 0, name = 1, items = 2, mtime = 3, physicalSize = 4
+}
+
+/// Which byte count drives sizes, sorting, and treemap area. Physical
+/// (allocated-on-disk) is the truthful default on modern macOS: cloud
+/// placeholders (OneDrive/iCloud dataless files) report full logical size
+/// while occupying ~nothing, and APFS clones double-report logically.
+enum SizeMetric: UInt8 {
+    case logical = 0
+    case physical = 1
 }
 
 enum TreemapAlgorithm: UInt8 {
@@ -308,6 +322,7 @@ final class EngineModel: @unchecked Sendable {
             CategoryStat(
                 category: KindCategory(rawValue: $0.category) ?? .other,
                 logical: $0.logical,
+                physical: $0.physical,
                 files: $0.files)
         }
     }
@@ -335,14 +350,15 @@ final class EngineModel: @unchecked Sendable {
     /// to Swift values and freed before returning.
     func treemapLayout(
         root: NodeID, width: CGFloat, height: CGFloat,
-        algorithm: TreemapAlgorithm = .squarified, minPixel: CGFloat = 2
+        algorithm: TreemapAlgorithm = .squarified, minPixel: CGFloat = 2,
+        metric: SizeMetric = .physical
     ) -> [TreemapRect] {
         var rects: UnsafeMutablePointer<DsTmRect>?
         var count = 0
         guard
             ds_treemap_layout(
                 ptr, root.raw, Float(width), Float(height), algorithm.rawValue,
-                Float(minPixel), &rects, &count) == 0, let rects
+                Float(minPixel), metric.rawValue, &rects, &count) == 0, let rects
         else { return [] }
         defer { ds_treemap_free(rects, count) }
         return UnsafeBufferPointer(start: rects, count: count).map { c in

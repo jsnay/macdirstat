@@ -45,6 +45,12 @@ private struct SidebarContent: View {
                         withAnimation { proxy.scrollTo(node.raw) }
                     }
                 }
+                // Finder-style horizontal navigation: → expands (then steps
+                // into the largest child), ← collapses (then jumps to the
+                // parent, so repeated ← walks and folds the path upward).
+                // ↑/↓ come from List selection itself.
+                .onKeyPress(.rightArrow) { handleRightArrow() }
+                .onKeyPress(.leftArrow) { handleLeftArrow() }
             }
 
             if let tail = outline.rootTail, state.searchText.isEmpty {
@@ -84,6 +90,36 @@ private struct SidebarContent: View {
                     state.select(node: node, revealInOutline: false)
                 }
             })
+    }
+
+    private func handleRightArrow() -> KeyPress.Result {
+        guard let selection = state.selection,
+            let row = outline.rows.first(where: { $0.node == selection })
+        else { return .ignored }
+        if row.hasChildren, !row.isExpanded {
+            outline.setExpanded(selection, true)
+            return .handled
+        }
+        if row.isExpanded, let child = outline.firstChild(of: selection) {
+            state.select(node: child, revealInOutline: false)
+            return .handled
+        }
+        return .ignored
+    }
+
+    private func handleLeftArrow() -> KeyPress.Result {
+        guard let selection = state.selection,
+            let row = outline.rows.first(where: { $0.node == selection })
+        else { return .ignored }
+        if row.isExpanded, row.hasChildren {
+            outline.setExpanded(selection, false)
+            return .handled
+        }
+        if let parent = outline.parent(of: selection) {
+            state.select(node: parent, revealInOutline: false)
+            return .handled
+        }
+        return .ignored
     }
 
     @ViewBuilder

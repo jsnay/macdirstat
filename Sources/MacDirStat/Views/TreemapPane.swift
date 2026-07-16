@@ -32,7 +32,7 @@ struct TreemapPane: View {
         let width = size.width * fraction
         rects = model.treemapLayout(
             root: state.treemapRoot, width: width, height: size.height,
-            algorithm: .squarified, minPixel: 2)
+            algorithm: .squarified, minPixel: 2, metric: state.sizeMetric)
     }
 }
 

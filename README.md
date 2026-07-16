@@ -39,7 +39,26 @@ git clone https://github.com/jsnay/dirstat-core ../dirstat-core   # sibling chec
 make run        # builds the Rust engine, stages .lib/, swift run
 make test       # engine + swift test
 make app        # release build bundled as MacDirStat.app
+make install    # make app + copy to /Applications
 ```
+
+## Full Disk Access
+
+macOS grants disk access per *responsible app*, so how you launch matters:
+
+- **`make run` / `swift run` from a terminal** — the scan runs with your
+  terminal's permissions. Grant **Terminal** (or iTerm) Full Disk Access in
+  System Settings → Privacy & Security → Full Disk Access, quit and reopen
+  it, and re-run. The MacDirStat binary itself will never appear in that
+  list when run this way.
+- **`make install` → launch `/Applications/MacDirStat.app`** — add the app
+  itself to the Full Disk Access list (＋ button → select MacDirStat.app).
+  The bundle is ad-hoc signed; after a rebuild/reinstall the grant may need
+  to be toggled off/on once since the binary identity changed.
+
+Without the grant, protected areas (Mail, Messages, Time Machine locals,
+some caches) are skipped and surface as the amber "N GB unreadable" figure
+in the footer — the math still reconciles, you just can't see inside them.
 
 `Scripts/build-engine.sh` builds `libdirstat_core.a` and **fails the build
 if the checked-in header** (`Sources/CDirstatCore/include/dirstat_core.h`)

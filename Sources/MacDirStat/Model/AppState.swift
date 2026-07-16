@@ -34,6 +34,16 @@ final class AppState: ObservableObject {
     // View state (1b).
     @Published var selection: NodeID?
     @Published var colorMode: ColorMode = .kind
+    /// On-disk (allocated) sizes by default: cloud placeholders and clones
+    /// make logical sizes exceed the physical disk. Toggle in the View menu.
+    @Published var sizeMetric: SizeMetric = .physical {
+        didSet {
+            guard sizeMetric != oldValue else { return }
+            outline.metric = sizeMetric
+            outline.reload()
+            layoutGeneration += 1
+        }
+    }
     @Published var isolatedCategory: KindCategory?  // legend chip click-to-isolate
     @Published var searchText: String = ""
     @Published var typeTablePresented = false
@@ -115,6 +125,7 @@ final class AppState: ObservableObject {
             zoomForward = []
             isolatedCategory = nil
             cleanup.clear()
+            outline.metric = sizeMetric
             outline.attach(model: scan.model)
             RecentScans.record(path)
             startSettleCadence()
@@ -319,6 +330,8 @@ final class OutlineStore: ObservableObject {
     @Published private(set) var rows: [Row] = []
     private var expanded: Set<NodeID> = []
     private var model: EngineModel?
+    /// Which byte count the rows display/sort by (set by AppState).
+    var metric: SizeMetric = .physical
 
     /// Cap children shown per level; the tail collapses into a summary row
     /// (the design's "…and 11 more, 64.1 GB").
@@ -346,6 +359,33 @@ final class OutlineStore: ObservableObject {
         reload()
     }
 
+    func isExpanded(_ node: NodeID) -> Bool {
+        expanded.contains(node)
+    }
+
+    func setExpanded(_ node: NodeID, _ value: Bool) {
+        if value {
+            expanded.insert(node)
+        } else {
+            expanded.remove(node)
+        }
+        reload()
+    }
+
+    /// First (largest) child of an expanded row, for →-into navigation.
+    func firstChild(of node: NodeID) -> NodeID? {
+        guard let model else { return nil }
+        let sort: ChildSort = metric == .physical ? .physicalSize : .size
+        return model.children(of: node, sort: sort, descending: true).first
+    }
+
+    func parent(of node: NodeID) -> NodeID? {
+        guard let model, let info = try? model.info(node), info.parent.isValid else {
+            return nil
+        }
+        return info.parent
+    }
+
     func reveal(path: [NodeID]) {
         for ancestor in path.dropLast() {
             expanded.insert(ancestor)
@@ -365,31 +405,38 @@ final class OutlineStore: ObservableObject {
 
     private func appendRows(node: NodeID, depth: Int, model: EngineModel, into out: inout [Row]) {
         guard let info = try? model.info(node) else { return }
+        let rootBytes = (try? model.info(model.root)).map(bytes(of:)) ?? 0
+        let nodeBytes = bytes(of: info)
         let isExpanded = expanded.contains(node)
         out.append(
             Row(
                 node: node,
                 depth: depth,
                 name: model.name(of: node),
-                size: info.logical,
-                percentOfRoot: model.percentOfRoot(node),
+                size: nodeBytes,
+                percentOfRoot: rootBytes > 0 ? Double(nodeBytes) / Double(rootBytes) * 100 : 0,
                 category: info.category,
                 isDirectory: info.isDirectory,
                 hasChildren: info.childCount > 0,
                 isExpanded: isExpanded))
         guard isExpanded, depth < 24 else { return }
-        let children = model.children(of: node, sort: .size, descending: true)
+        let sort: ChildSort = metric == .physical ? .physicalSize : .size
+        let children = model.children(of: node, sort: sort, descending: true)
         for child in children.prefix(Self.perLevelLimit) {
             appendRows(node: child, depth: depth + 1, model: model, into: &out)
         }
         if node == model.root, children.count > Self.perLevelLimit {
             let tail = children.dropFirst(Self.perLevelLimit)
             let bytes = tail.reduce(UInt64(0)) { acc, id in
-                acc + ((try? model.info(id))?.logical ?? 0)
+                acc + ((try? model.info(id)).map(self.bytes(of:)) ?? 0)
             }
             rootTail = TailSummary(count: tail.count, bytes: bytes)
         } else if node == model.root {
             rootTail = nil
         }
+    }
+
+    private func bytes(of info: NodeInfo) -> UInt64 {
+        metric == .physical ? info.physical : info.logical
     }
 }

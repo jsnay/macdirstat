@@ -37,6 +37,10 @@ struct MacDirStatApp: App {
                 Button("Type Table") { state.typeTablePresented.toggle() }
                     .keyboardShortcut("t")
                     .disabled(state.model == nil)
+                Picker("Sizes", selection: $state.sizeMetric) {
+                    Text("On Disk (Allocated)").tag(SizeMetric.physical)
+                    Text("Apparent (Logical)").tag(SizeMetric.logical)
+                }
                 Divider()
                 Button("Zoom Out") { state.goBack() }
                     .keyboardShortcut("[", modifiers: .command)
