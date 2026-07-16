@@ -23,7 +23,7 @@ second.
 | APP-A11Y-1 | VoiceOver audit | The outline sidebar is the accessible twin by design; the formal audit + treemap accessible elements are pending. |
 | APP-I18N-1 | String catalog | Strings are inline English for now. |
 | APP-SEC-1 | Notarization/hardened runtime | Phase 6. |
-| EVA-* UI tests | XCUITest suite | Logic-level tests ship (cleanup guard/hints/palette); UI automation needs a Mac CI runner. |
+| EVA-* UI tests | XCUITest suite | Integration tests now drive the real engine end-to-end (scan/layout/refresh/cleanup/AppState) and unit tests cover the safety logic; on-screen XCUITest snapshot automation still needs an app-bundle test host. |
 
 ## Cut by the accepted design review (not deferred)
 

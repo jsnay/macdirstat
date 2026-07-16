@@ -471,6 +471,10 @@ final class AppState: ObservableObject {
         switch cleanup.toggle(node: node, model: model) {
         case .refusedSystemCritical:
             lastError = "System-critical paths can’t be staged for cleanup."
+        case .refusedUnsafeName:
+            lastError =
+                "This item’s name can’t be represented safely and won’t be staged. "
+                + "Rename it in Finder first if you need to delete it."
         case .failed:
             lastError = "Couldn’t read that item’s details — try rescanning."
         case .staged, .unstaged:

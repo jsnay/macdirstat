@@ -125,3 +125,119 @@ final class PaletteTests: XCTestCase {
         XCTAssertEqual(Palette.extensionSlots.count, 13)
     }
 }
+
+// MARK: - FileIdentity / TOCTOU (app#6)
+
+final class FileIdentityTests: XCTestCase {
+    private func tempFile(_ name: String) -> String {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mds-id-\(name)-\(getpid())")
+        FileManager.default.createFile(atPath: url.path, contents: Data(count: 8))
+        return url.path
+    }
+
+    func testLstatRoundTrip() {
+        let path = tempFile("round")
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let a = FileIdentity.lstat(path)
+        let b = FileIdentity.lstat(path)
+        XCTAssertNotNil(a)
+        XCTAssertEqual(a, b, "same file → same identity")
+    }
+
+    func testMissingPathIsNil() {
+        XCTAssertNil(FileIdentity.lstat("/nonexistent/mds/\(getpid())"))
+    }
+
+    /// The core TOCTOU signal: replacing the file at a path yields a
+    /// different (device, inode), which the commit gate detects.
+    func testReplacedFileHasDifferentIdentity() throws {
+        let path = tempFile("swap")
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let before = FileIdentity.lstat(path)
+        // Remove and recreate: a new inode.
+        try FileManager.default.removeItem(atPath: path)
+        FileManager.default.createFile(atPath: path, contents: Data(count: 8))
+        let after = FileIdentity.lstat(path)
+        XCTAssertNotNil(before)
+        XCTAssertNotNil(after)
+        XCTAssertNotEqual(before, after, "a replaced file must not match its staged identity")
+    }
+
+    /// lstat does not follow a final symlink: a link and its target have
+    /// distinct identities, so swapping a path for a symlink is detected.
+    func testSymlinkNotFollowed() throws {
+        let target = tempFile("target")
+        let link = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mds-id-link-\(getpid())").path
+        defer {
+            try? FileManager.default.removeItem(atPath: target)
+            try? FileManager.default.removeItem(atPath: link)
+        }
+        try FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: target)
+        let targetId = FileIdentity.lstat(target)
+        let linkId = FileIdentity.lstat(link)
+        XCTAssertNotNil(linkId)
+        XCTAssertNotEqual(targetId, linkId, "lstat sees the link itself, not its target")
+    }
+}
+
+// MARK: - SecurityChecks (app#9)
+
+final class SecurityCheckTests: XCTestCase {
+    func testRootIsRefused() {
+        XCTAssertTrue(SecurityChecks.isRunningAsRoot(euid: 0))
+    }
+    func testNormalUserIsAllowed() {
+        XCTAssertFalse(SecurityChecks.isRunningAsRoot(euid: 501))
+        XCTAssertFalse(SecurityChecks.isRunningAsRoot(euid: 1000))
+    }
+}
+
+// MARK: - ByteFormat
+
+final class ByteFormatTests: XCTestCase {
+    func testMagnitudeBoundaries() {
+        XCTAssertEqual(ByteFormat.compact(0), "0 KB")
+        XCTAssertEqual(ByteFormat.compact(1_000_000), "1 MB")
+        XCTAssertEqual(ByteFormat.compact(1_000_000_000), "1.0 GB")
+        XCTAssertEqual(ByteFormat.compact(1_000_000_000_000), "1.00 TB")
+    }
+    func testGigabyteHasOneDecimal() {
+        XCTAssertEqual(ByteFormat.compact(1_500_000_000), "1.5 GB")
+    }
+}
+
+// MARK: - VolumeInfo logic
+
+final class VolumeInfoTests: XCTestCase {
+    private func vol(path: String, total: UInt64, free: UInt64) -> VolumeInfo {
+        VolumeInfo(url: URL(fileURLWithPath: path), name: "V", total: total, free: free, isInternal: true)
+    }
+
+    func testLowSpaceThreshold() {
+        XCTAssertTrue(vol(path: "/", total: 1000, free: 90).isLowOnSpace)   // 9% free
+        XCTAssertFalse(vol(path: "/", total: 1000, free: 110).isLowOnSpace) // 11% free
+    }
+
+    func testUsedAndFractions() {
+        let v = vol(path: "/", total: 1000, free: 250)
+        XCTAssertEqual(v.used, 750)
+        XCTAssertEqual(v.usedFraction, 0.75, accuracy: 0.0001)
+        XCTAssertEqual(v.freeFraction, 0.25, accuracy: 0.0001)
+    }
+
+    /// The boot volume ("/") scans via the APFS Data volume when present;
+    /// arbitrary folders pass through unchanged.
+    func testScanPathRouting() {
+        let dataExists = FileManager.default.fileExists(atPath: "/System/Volumes/Data")
+        let boot = vol(path: "/", total: 1000, free: 500)
+        if dataExists {
+            XCTAssertEqual(boot.scanPath, "/System/Volumes/Data")
+        } else {
+            XCTAssertEqual(boot.scanPath, "/")
+        }
+        let folder = vol(path: "/Users/someone/dev", total: 1000, free: 500)
+        XCTAssertEqual(folder.scanPath, "/Users/someone/dev")
+    }
+}
