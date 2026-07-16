@@ -12,28 +12,28 @@ something lives, that sentence decides it.
 
 ## What it does
 
-The UX follows the accepted Claude Design review (options **1b, 1d, 1e, 1f,
-1g**), which supersedes the original WinDirStat-parity chrome:
+The UX follows a deliberate design direction that supersedes the original
+WinDirStat-parity chrome:
 
-- **1f — the window is the picker.** No modal front door: volumes with real
+- **The window is the picker.** No modal front door: volumes with real
   capacity bars and a low-space badge, a drop-anything target, recent scans,
   and the Full Disk Access ask on one calm surface.
-- **1b — evolved two-pane layout.** The outline is a Mac sidebar with one
+- **Evolved two-pane layout.** The outline is a Mac sidebar with one
   smart column (name + size + a %-of-root bar behind the row, largest
   first); the treemap gets ~75% of the window; the type list is a legend
   chip strip with click-to-isolate (full table on ⌘T); free space is the
   capacity footer; `<Unknown>` is an amber "N GB unreadable — Grant Full
   Disk Access" call-to-action.
-- **1d — the scan is the show.** Determinate progress (bytes vs used-bytes,
+- **The scan is the show.** Determinate progress (bytes vs used-bytes,
   denominator known up front), counters that only go up, a map that
   subdivides on a ~2 s settle cadence with a hatched "still scanning"
   region, everything clickable mid-scan, and Stop keeps what was found.
-- **1e — delete via staging, not sniping.** Items collect in a Cleanup list
+- **Delete via staging, not sniping.** Items collect in a Cleanup list
   (striped amber in the map) with a running reclaim total; one review, one
   commit — to Trash, always. Path-aware hints ("Xcode rebuilds this", "may
   be the only backup of this device"); system-critical paths can't be
   staged; after commit the engine refreshes so every pane reconciles.
-- **1g — color = meaning.** Three channels over the same geometry: **Kind**
+- **Color = meaning.** Three channels over the same geometry: **Kind**
   (8 stable categories, default), **Age** (bright = recent, dark = untouched
   — "big and dark" is the delete-me signal), **Extension** (top-12 slots,
   the parity channel). The app owns every RGB value.
@@ -50,10 +50,10 @@ APFS volume-group accounting (see "macOS storage truths" below).
 |---|---|
 | `Sources/MacDirStat/Engine/Engine.swift` | The FFI wrapper — the only file with raw pointers. Opaque `NodeID`s, lazy row fetches, one bulk buffer per treemap layout, progress marshalled to the main actor. |
 | `Sources/MacDirStat/Model/AppState.swift` | The state machine: scan lifecycle + 2 s settle cadence, selection/zoom stacks, size metric, `OutlineStore` sidebar rows. |
-| `Sources/MacDirStat/Model/CleanupStore.swift` | Staging vs committing (1e), the system-path guard + `/System/Volumes/Data` canonicalization, path-aware hints. |
+| `Sources/MacDirStat/Model/CleanupStore.swift` | Staging vs committing, the system-path guard + `/System/Volumes/Data` canonicalization, path-aware hints. |
 | `Sources/MacDirStat/Model/Palette.swift` | Every RGB in the app (kind/age/extension channels, ambers) + byte formatting. |
 | `Sources/MacDirStat/Model/Volumes.swift` | Mounted volumes with capacity figures; the boot-volume → Data-volume scan-path rule; recents. |
-| `Sources/MacDirStat/Views/` | Welcome picker (1f), main two-pane surface (1b/1d), sidebar outline, treemap canvas, cleanup review sheet (1e), ⌘T type table. |
+| `Sources/MacDirStat/Views/` | Welcome picker, main two-pane surface, sidebar outline, treemap canvas, cleanup review sheet, ⌘T type table. |
 | `Sources/CDirstatCore/include/dirstat_core.h` | The **pinned** engine header (generated upstream — never edit here; the build fails if it drifts from the engine's). |
 | `Tests/MacDirStatTests/` | Unit tests for the pure app-side logic (cleanup guard, hints, palette completeness). |
 | `Scripts/build-engine.sh`, `Makefile` | Engine staging + header-pin gate + app bundling. |
