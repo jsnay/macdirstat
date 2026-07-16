@@ -48,6 +48,10 @@ final class AppState: ObservableObject {
     @Published private(set) var rootName: String = ""
     @Published private(set) var scanTargetPath: String = ""
     @Published var lastError: String?
+    /// A subtree re-scan ("Re-scan From Here") is in flight.
+    @Published private(set) var isRefreshing = false
+    /// What the user originally asked to scan, for Re-scan All.
+    private var lastRequest: (path: String, volume: VolumeInfo?)?
 
     let cleanup = CleanupStore()
     let outline = OutlineStore()
@@ -77,6 +81,7 @@ final class AppState: ObservableObject {
 
     func startScan(path: String, volume: VolumeInfo?) {
         let volume = volume ?? VolumeInfo.containing(path: path)
+        lastRequest = (path, volume)
         // Scanning "Macintosh HD" means scanning the APFS Data volume: all
         // user data, one device, and no firmlink double-traversal (the bug
         // that made a 256 GB disk read as a terabyte).
@@ -224,6 +229,38 @@ final class AppState: ObservableObject {
         zoomBack.append(treemapRoot)
         zoomRoot = next
         layoutGeneration += 1
+    }
+
+    // MARK: - Re-scan (for changes made outside the app)
+
+    /// Re-read one node and its subtree from disk — "Re-scan From Here",
+    /// for when the filesystem was changed in Finder or a terminal. Runs
+    /// off the main thread (the engine allows concurrent reads); every
+    /// pane reconciles when it lands.
+    func rescan(_ node: NodeID) {
+        guard let model, node.isValid, !isScanning, !isRefreshing else { return }
+        isRefreshing = true
+        Task.detached { [model] in
+            let failure: String?
+            do {
+                try model.refresh(node)
+                failure = nil
+            } catch {
+                failure = "\(error)"
+            }
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.isRefreshing = false
+                if let failure { self.lastError = "Re-scan failed: \(failure)" }
+                self.modelDidMutate()
+            }
+        }
+    }
+
+    /// Throw away the model and scan the original target again (⇧⌘R).
+    func rescanAll() {
+        guard let request = lastRequest, !isScanning else { return }
+        startScan(path: request.path, volume: request.volume)
     }
 
     // MARK: - Actions

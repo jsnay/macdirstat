@@ -32,6 +32,15 @@ struct MacDirStatApp: App {
                 Button("Zoom Back In") { state.goForward() }
                     .keyboardShortcut("]", modifiers: .command)
                     .disabled(!state.canGoForward)
+                Divider()
+                Button("Re-scan Selection") {
+                    if let selection = state.selection { state.rescan(selection) }
+                }
+                .keyboardShortcut("r")
+                .disabled(state.selection == nil || state.isScanning || state.isRefreshing)
+                Button("Re-scan All") { state.rescanAll() }
+                    .keyboardShortcut("r", modifiers: [.command, .shift])
+                    .disabled(state.model == nil || state.isScanning)
             }
         }
     }

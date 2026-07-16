@@ -229,7 +229,12 @@ final class EngineScan {
 
 /// A scanned model. The engine owns the tree; this class owns the model
 /// lifetime and frees it deterministically (APP-FFI-4).
-final class EngineModel {
+///
+/// `@unchecked Sendable`: the class holds only the opaque engine pointer,
+/// and the engine's documented thread-safety contract makes all
+/// `ds_model_*`/`ds_treemap_*` reads (and `ds_refresh_node` absent a
+/// concurrent scan) safe from any thread.
+final class EngineModel: @unchecked Sendable {
     private let ptr: OpaquePointer
 
     fileprivate init(taking ptr: OpaquePointer) {

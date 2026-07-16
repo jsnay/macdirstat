@@ -57,6 +57,8 @@ private struct TreemapContent: View {
                 Button("Reveal in Finder") { state.revealInFinder(selection) }
                 Button("Copy Path") { state.copyPath(selection) }
                 Divider()
+                Button("Re-scan From Here") { state.rescan(selection) }
+                    .disabled(state.isScanning || state.isRefreshing)
                 Button(
                     cleanup.stagedNodes.contains(selection)
                         ? "Remove from Cleanup" : "Add to Cleanup"
