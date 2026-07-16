@@ -70,6 +70,12 @@ final class CleanupStore: ObservableObject {
         let category: KindCategory
         /// Regeneration hint / amber warning for the review row.
         let hint: CleanupHint
+        /// Filesystem identity captured at STAGE time (device + inode, via
+        /// lstat so symlinks are not followed). Re-verified immediately
+        /// before the trash call so a same-user process can't swap the path
+        /// for a different file/symlink in between (TOCTOU — dirstat-core
+        /// app#6). `nil` if the stat failed at staging.
+        let identity: FileIdentity?
         var id: UInt64 { node.raw }
     }
 
@@ -92,11 +98,14 @@ final class CleanupStore: ObservableObject {
         case staged
         case unstaged
         case refusedSystemCritical
+        /// Name isn't valid UTF-8: the lossy path could denote a different
+        /// file, so destructive action is refused (security, app#5).
+        case refusedUnsafeName
         case failed
     }
 
-    /// Toggle a node in/out of the cleanup list. System-critical paths
-    /// can't be staged at all (design 1e rule 4) — refusal happens here,
+    /// Toggle a node in/out of the cleanup list. System-critical paths and
+    /// non-UTF-8 names can't be staged at all — both refusals happen here,
     /// at stage time, never as a surprise at commit time.
     func toggle(node: NodeID, model: EngineModel) -> StageResult {
         // Already staged → unstage (the same menu item does both).
@@ -104,13 +113,18 @@ final class CleanupStore: ObservableObject {
             items.remove(at: index)
             return .unstaged
         }
+        guard let info = try? model.info(node) else { return .failed }
+        // Non-UTF-8 names: the string path is lossy and could collide with a
+        // different real file. Refuse destructive staging entirely (app#5).
+        guard !info.hasNonUTF8Name else {
+            return .refusedUnsafeName
+        }
         // Guard check runs on the engine's absolute path (canonicalized
         // inside the guard for Data-volume prefixes).
         let path = model.path(of: node)
         guard !CleanupGuard.isSystemCritical(path: path) else {
             return .refusedSystemCritical
         }
-        guard let info = try? model.info(node) else { return .failed }
         items.append(
             StagedItem(
                 node: node,
@@ -119,7 +133,9 @@ final class CleanupStore: ObservableObject {
                 // Physical bytes: "frees N GB" is a promise about the disk.
                 size: info.physical,
                 category: info.category,
-                hint: CleanupHint.forPath(path)))
+                hint: CleanupHint.forPath(path),
+                // Capture identity now; re-checked before the trash call.
+                identity: FileIdentity.lstat(path)))
         return .staged
     }
 
@@ -148,6 +164,18 @@ final class CleanupStore: ObservableObject {
         // "Reclaimed N ✓" toast.
         let reclaim = total
         for item in items {
+            // TOCTOU gate (app#6): re-verify the path still resolves to the
+            // exact (device, inode) captured at staging. A same-user process
+            // could have swapped a path component for a symlink or replaced
+            // the file since the user reviewed it; trashing by the stale path
+            // would then hit a file they never saw. lstat (no symlink follow)
+            // and require an identity match, or skip this item.
+            let now = FileIdentity.lstat(item.path)
+            guard let staged = item.identity, let now, now == staged else {
+                failures.append(
+                    "\(item.path): changed on disk since you staged it — re-stage to delete")
+                continue
+            }
             let url = URL(fileURLWithPath: item.path)
             do {
                 try FileManager.default.trashItem(at: url, resultingItemURL: nil)
@@ -170,6 +198,26 @@ final class CleanupStore: ObservableObject {
             }
         }
         return failures
+    }
+}
+
+// MARK: - FileIdentity: TOCTOU-safe filesystem identity
+
+/// A file's (device, inode) pair, read with `lstat` so a symlink resolves
+/// to the LINK itself, not its target. Comparing the value captured at
+/// staging with a fresh read just before deletion detects any swap of the
+/// path to a different file or a symlink in between (app#6). Pure and
+/// synchronous; testable without an engine.
+struct FileIdentity: Equatable {
+    let device: UInt64
+    let inode: UInt64
+
+    /// lstat the path; nil if it does not exist or cannot be stat'd.
+    static func lstat(_ path: String) -> FileIdentity? {
+        var st = stat()
+        // Darwin lstat: does not follow a final symlink.
+        guard Foundation.lstat(path, &st) == 0 else { return nil }
+        return FileIdentity(device: UInt64(bitPattern: Int64(st.st_dev)), inode: st.st_ino)
     }
 }
 

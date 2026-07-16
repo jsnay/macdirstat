@@ -173,6 +173,12 @@ struct NodeInfo {
     /// Same directory inode already counted via another path (APFS
     /// firmlink / bind mount); shown but contributes nothing.
     let isAliasDuplicate: Bool
+    /// The name is not valid UTF-8, so `path(of:)`'s lossy string can denote
+    /// a DIFFERENT real file. Destructive actions must be refused on such
+    /// nodes (security: confused-deputy deletion — dirstat-core#5). macOS
+    /// filesystems reject such names at creation, but network/foreign mounts
+    /// can surface them, so the app defends anyway.
+    let hasNonUTF8Name: Bool
     /// The three 1g color-channel keys (kind / age / extension). Values
     /// only; the RGB mapping lives in Palette.swift.
     let category: KindCategory
@@ -196,6 +202,7 @@ struct NodeInfo {
         isSymlink = c.kind == 2
         isUnreadable = c.flags & UInt32(DS_NODE_FLAG_UNREADABLE) != 0
         isAliasDuplicate = c.flags & UInt32(DS_NODE_FLAG_DUPLICATE) != 0
+        hasNonUTF8Name = c.flags & UInt32(DS_NODE_FLAG_NON_UTF8) != 0
         category = KindCategory(rawValue: c.category) ?? .other
         ageBucket = Int(c.age_bucket)
         extSlot = Int(c.ext_slot)
@@ -387,6 +394,11 @@ final class EngineScan {
             var options = DsScanOptions()
             options.skip_paths = argv
             options.skip_paths_len = count
+            // Directory-bomb ceiling (dirstat-core#11): generous enough that
+            // a real volume (tens of millions of items) never trips it, but
+            // a degenerate/hostile tree fails with a partial result + report
+            // note instead of exhausting memory.
+            options.max_nodes = 50_000_000
             return root.withCString { ds_scan_begin($0, &options, callback, user) }
         }
         guard let handle else {

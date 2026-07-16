@@ -40,7 +40,23 @@ import SwiftUI
 //     clears it on dismiss, so any component can post one error string.
 // =============================================================================
 
-// MARK: - AppDelegate (activation quirk)
+// MARK: - Security checks
+
+/// Startup guards that don't depend on any UI. Kept as free functions
+/// taking their inputs explicitly so they are unit-testable without a
+/// running app (app#9).
+enum SecurityChecks {
+    /// Running as root gains nothing for a disk scanner — Full Disk Access
+    /// is the mechanism macOS actually uses, granted to the user at runtime
+    /// — and it weakens the safety story: root Trash semantics are odd and
+    /// the cleanup guard's home-directory rules assume a normal user. So we
+    /// refuse to run as root. Takes the euid explicitly for testing.
+    static func isRunningAsRoot(euid: uid_t) -> Bool {
+        euid == 0
+    }
+}
+
+// MARK: - AppDelegate (activation quirk + root refusal)
 
 /// When launched as a bare SwiftPM executable (`swift run`) there is no app
 /// bundle, so macOS treats the process as a background tool: the menu bar
@@ -48,6 +64,17 @@ import SwiftUI
 /// activation explicitly fixes both (a bundled build is unaffected).
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Refuse to run as root (app#9): alert, then exit before any scan.
+        if SecurityChecks.isRunningAsRoot(euid: geteuid()) {
+            let alert = NSAlert()
+            alert.messageText = "MacDirStat can’t run as root"
+            alert.informativeText =
+                "Run it as your normal user and grant Full Disk Access instead. "
+                + "Running as root weakens the app’s deletion safeguards."
+            alert.alertStyle = .critical
+            alert.runModal()
+            exit(1)
+        }
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
     }
