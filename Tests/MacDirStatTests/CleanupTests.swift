@@ -2,6 +2,34 @@ import XCTest
 
 @testable import MacDirStat
 
+// =============================================================================
+// FILE: Tests/MacDirStatTests/CleanupTests.swift
+// =============================================================================
+//
+// PURPOSE
+//   Unit checks for the PURE app-side logic — the pieces that hold user
+//   safety and visual consistency but need no engine, no filesystem, and
+//   no UI: the cleanup system-path guard, the path-aware deletion hints,
+//   and palette completeness. Engine correctness (sizes, sorting, layout,
+//   dedup) is proven in dirstat-core's own suite and deliberately NOT
+//   re-proven here; UI/integration coverage (EVA-*) is deferred to a
+//   macOS UI-test runner.
+//
+// UPSTREAM DEPENDENCIES (what this file consumes)
+//   - @testable MacDirStat: CleanupGuard, CleanupHint, Palette,
+//     KindCategory.
+//   - XCTest; FileManager only to resolve the real home directory so the
+//     home-folder guard cases test the machine's actual paths.
+//
+// STRUCTURE
+//   - CleanupGuardTests: refusals (system paths, home roots), allowances
+//     (ordinary user files), and the /System/Volumes/Data canonicalization
+//     cases from the field-reported "even a .mov is system-critical" bug
+//   - CleanupHintTests: regeneration hints + the only-backup amber warning
+//   - PaletteTests: every category has a color; channel table sizes are
+//     pinned (5 age buckets, 12 extension slots + "everything else")
+// =============================================================================
+
 /// EVA-level unit checks for the pure app-side logic behind design 1e/1g
 /// (engine correctness is proven in dirstat-core's own suite, not here).
 final class CleanupGuardTests: XCTestCase {

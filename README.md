@@ -5,12 +5,19 @@ dominant treemap, a progressive scan you can explore while it runs, and a
 staged, Trash-first cleanup flow. Swift/SwiftUI host over the
 [dirstat-core](https://github.com/jsnay/dirstat-core) Rust engine (C ABI).
 
+**The boundary rule**: the engine owns *facts about the data* (sizes,
+counts, sort order, aggregation, layout rectangles); this app owns *macOS*
+(pixels, RGB, Finder/Trash, permissions, menus). If you're unsure where
+something lives, that sentence decides it.
+
+## What it does
+
 The UX follows the accepted Claude Design review (options **1b, 1d, 1e, 1f,
 1g**), which supersedes the original WinDirStat-parity chrome:
 
 - **1f — the window is the picker.** No modal front door: volumes with real
-  capacity bars, a drop-anything target, recent scans, and the Full Disk
-  Access ask on one calm surface.
+  capacity bars and a low-space badge, a drop-anything target, recent scans,
+  and the Full Disk Access ask on one calm surface.
 - **1b — evolved two-pane layout.** The outline is a Mac sidebar with one
   smart column (name + size + a %-of-root bar behind the row, largest
   first); the treemap gets ~75% of the window; the type list is a legend
@@ -23,14 +30,38 @@ The UX follows the accepted Claude Design review (options **1b, 1d, 1e, 1f,
   region, everything clickable mid-scan, and Stop keeps what was found.
 - **1e — delete via staging, not sniping.** Items collect in a Cleanup list
   (striped amber in the map) with a running reclaim total; one review, one
-  commit — to Trash, always. Path-aware hints ("Xcode rebuilds this",
-  "may be the only backup of this device"); system-critical paths can't be
+  commit — to Trash, always. Path-aware hints ("Xcode rebuilds this", "may
+  be the only backup of this device"); system-critical paths can't be
   staged; after commit the engine refreshes so every pane reconciles.
 - **1g — color = meaning.** Three channels over the same geometry: **Kind**
-  (8 stable UTI-style categories, default), **Age** (bright = recent, dark =
-  untouched — "big and dark" is the delete-me signal), **Extension**
-  (top-12 slots, the parity channel). The app owns every RGB value; the
-  engine owns which key each node gets.
+  (8 stable categories, default), **Age** (bright = recent, dark = untouched
+  — "big and dark" is the delete-me signal), **Extension** (top-12 slots,
+  the parity channel). The app owns every RGB value.
+
+Plus, from field use: **on-disk (allocated) sizes by default** with a
+View-menu Apparent toggle, **Re-scan From Here** (context menus) / **⌘R**
+re-scan selection / **⇧⌘R** re-scan all, Finder-style **arrow-key tree
+navigation** (→ expands/steps in, ← collapses/jumps to parent), and correct
+APFS volume-group accounting (see "macOS storage truths" below).
+
+## Repository map
+
+| Path | What it is |
+|---|---|
+| `Sources/MacDirStat/Engine/Engine.swift` | The FFI wrapper — the only file with raw pointers. Opaque `NodeID`s, lazy row fetches, one bulk buffer per treemap layout, progress marshalled to the main actor. |
+| `Sources/MacDirStat/Model/AppState.swift` | The state machine: scan lifecycle + 2 s settle cadence, selection/zoom stacks, size metric, `OutlineStore` sidebar rows. |
+| `Sources/MacDirStat/Model/CleanupStore.swift` | Staging vs committing (1e), the system-path guard + `/System/Volumes/Data` canonicalization, path-aware hints. |
+| `Sources/MacDirStat/Model/Palette.swift` | Every RGB in the app (kind/age/extension channels, ambers) + byte formatting. |
+| `Sources/MacDirStat/Model/Volumes.swift` | Mounted volumes with capacity figures; the boot-volume → Data-volume scan-path rule; recents. |
+| `Sources/MacDirStat/Views/` | Welcome picker (1f), main two-pane surface (1b/1d), sidebar outline, treemap canvas, cleanup review sheet (1e), ⌘T type table. |
+| `Sources/CDirstatCore/include/dirstat_core.h` | The **pinned** engine header (generated upstream — never edit here; the build fails if it drifts from the engine's). |
+| `Tests/MacDirStatTests/` | Unit tests for the pure app-side logic (cleanup guard, hints, palette completeness). |
+| `Scripts/build-engine.sh`, `Makefile` | Engine staging + header-pin gate + app bundling. |
+| `deferrals.md` | What's deferred vs what the design review deliberately cut. |
+
+Every Swift file opens with a structured header (purpose, upstream
+dependencies, downstream consumers, structure, behavior & invariants) —
+start there when reviewing.
 
 ## Building (macOS 14+, Xcode 15+ / Swift 5.9+, Rust toolchain)
 
@@ -38,9 +69,14 @@ The UX follows the accepted Claude Design review (options **1b, 1d, 1e, 1f,
 git clone https://github.com/jsnay/dirstat-core ../dirstat-core   # sibling checkout
 make run        # builds the Rust engine, stages .lib/, swift run
 make test       # engine + swift test
-make app        # release build bundled as MacDirStat.app
+make app        # release build bundled (ad-hoc signed) as MacDirStat.app
 make install    # make app + copy to /Applications
 ```
+
+Two safety gates connect the repos: `Scripts/build-engine.sh` **fails the
+build if the pinned header differs from the engine's** (so Swift and Rust
+can't silently disagree), and the wrapper verifies `ds_abi_version()` at
+launch (so a stale staticlib dies loudly, never mid-scan).
 
 ## Full Disk Access
 
@@ -60,27 +96,38 @@ Without the grant, protected areas (Mail, Messages, Time Machine locals,
 some caches) are skipped and surface as the amber "N GB unreadable" figure
 in the footer — the math still reconciles, you just can't see inside them.
 
-`Scripts/build-engine.sh` builds `libdirstat_core.a` and **fails the build
-if the checked-in header** (`Sources/CDirstatCore/include/dirstat_core.h`)
-**differs from the engine's** — the header pin. The wrapper additionally
-verifies `ds_abi_version()` at startup.
+## macOS storage truths (why the numbers are the way they are)
 
-## Architecture
+These bit us in field testing and are now handled deliberately:
 
-- `Sources/MacDirStat/Engine/` — the FFI wrapper: the only file that sees
-  raw pointers. The engine owns the tree; Swift holds opaque `NodeID`s,
-  fetches visible rows lazily, and gets treemap layouts as one bulk buffer.
-  Progress callbacks are marshalled to the main actor here.
-- `Sources/MacDirStat/Model/` — app state: scan lifecycle + 2 s settle
-  cadence, selection/zoom, color channels + palettes (the app owns RGB),
-  cleanup staging with the system-path guard and path hints, volumes.
-- `Sources/MacDirStat/Views/` — SwiftUI: welcome/picker, toolbar, sidebar
-  outline, treemap canvas, legend chips, capacity footer, cleanup pill +
-  review sheet, type table.
+- **The boot "volume" is an APFS volume group.** The Data volume is mounted
+  at `/System/Volumes/Data`, and your directories are *also* visible at `/`
+  through firmlinks. Scanning naively counts everything twice. MacDirStat
+  scans the Data volume directly (still labeled "Macintosh HD"), and the
+  engine additionally dedupes aliased directory inodes as defense in depth.
+- **Apparent sizes lie on modern filesystems.** Cloud-only placeholder
+  files (OneDrive/iCloud "dataless" files) report full size while occupying
+  ~0 bytes; APFS clones double-report; sparse files (Docker.raw) inflate.
+  That's why **on-disk (allocated) size is the default metric** — it's the
+  number that matches your actual disk. View → Sizes toggles Apparent back
+  on when you want it.
+- **"Free space" means three things on macOS.** Strictly free blocks (what
+  our footer shows); Finder's "available" (free + purgeable: snapshots,
+  caches, evictable cloud files); and the installer check
+  (`…ForImportantUsage`, which assumes purgeables get purged). If macOS says
+  an update won't fit even though Finder shows space, hunting big
+  *allocated* files here is what actually helps.
 
-Boundary rule: the engine owns *facts about the data*; the app owns
-*macOS*. See `MacDirStat-App-Spec.md` §0 and `deferrals.md` for what is
-deferred vs cut-by-design.
+## Testing & CI
+
+- Engine correctness (sizes, sorting, dedup, layout geometry) is proven in
+  dirstat-core's own 30-test suite and **not re-proven here**.
+- `Tests/MacDirStatTests` covers the pure app-side logic that guards user
+  safety: the system-path refusal rules (including the Data-volume
+  canonicalization), deletion hints, palette completeness.
+- CI builds the real engine from a sibling checkout (matching branch, else
+  `main`) and runs `swift build` + `swift test` on a macOS runner — the FFI
+  seam is tested, never mocked.
 
 ## License
 

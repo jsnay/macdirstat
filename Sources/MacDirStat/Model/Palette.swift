@@ -1,13 +1,56 @@
 import SwiftUI
 
+// =============================================================================
+// FILE: Sources/MacDirStat/Model/Palette.swift
+// =============================================================================
+//
+// PURPOSE
+//   The app-owned RGB side of the color story (design 1g / APP-EXT-3):
+//   the ENGINE assigns keys (kind category, age bucket, extension slot),
+//   this file maps every key to an actual color, identically wherever it
+//   appears — treemap rects, legend chips, sidebar swatches, review-sheet
+//   rows. Also hosts the small byte-formatting helper the same UI labels
+//   share. One file so the mapping cannot drift between views.
+//
+// UPSTREAM DEPENDENCIES (what this file consumes)
+//   - SwiftUI: Color.
+//   - Engine/Engine.swift: KindCategory + TreemapRect (the color keys).
+//
+// DOWNSTREAM CONSUMERS (who depends on this file)
+//   - Views/TreemapPane.swift: Palette.color(for:mode:) per rect, staged
+//     amber striping color.
+//   - Views/MainView.swift: chip/capacity-bar colors, warning amber.
+//   - Views/SidebarOutline.swift: category swatches; ByteFormat sizes.
+//   - Views/CleanupReviewSheet.swift / TypeTableSheet.swift / WelcomeView:
+//     swatches, staged/warning colors, ByteFormat.
+//   - Model/AppState.swift: ColorMode (the published channel selection).
+//   - Tests/MacDirStatTests/CleanupTests.swift: completeness checks.
+//
+// STRUCTURE
+//   - ColorMode: the three 1g channels (kind / age / extension)
+//   - Palette: kind map, age ramp, extension slots, staged/warning ambers
+//   - Color(hex:): 0xRRGGBB convenience init
+//   - ByteFormat: compact decimal-unit byte strings for labels
+//
+// BEHAVIOR & INVARIANTS
+//   - Same geometry all three channels: switching ColorMode recolors, it
+//     never relayouts.
+//   - Array channels (age, extensionSlots) are indexed with min()-clamps
+//     at the call sites so an engine value beyond the table cannot crash.
+//   - ByteFormat uses decimal units (1 GB = 10^9), matching what Finder
+//     and disk vendors report.
+// =============================================================================
+
 /// Color channels for the treemap (design 1g): kind is the proposed
 /// default, age is the "big AND untouched" delete-me signal, extension is
 /// the WinDirStat-parity channel. Same geometry all three times — the
 /// engine supplies the keys, the app owns every RGB value.
 enum ColorMode: String, CaseIterable, Identifiable {
+    // `extension` is a Swift keyword, hence the trailing underscore.
     case kind, age, extension_
     var id: String { rawValue }
 
+    /// Segmented-control label in the toolbar.
     var label: String {
         switch self {
         case .kind: "Kind"
@@ -17,6 +60,11 @@ enum ColorMode: String, CaseIterable, Identifiable {
     }
 }
 
+// MARK: - Palette tables
+
+/// The single source of truth for every color in the app. Views must not
+/// invent category/age/extension colors — they ask here, so the treemap,
+/// chips, swatches, and capacity bar always agree (APP-EXT-3).
 enum Palette {
     /// 8 stable, learnable kind colors (design CATC values).
     static let kind: [KindCategory: Color] = [
@@ -39,6 +87,7 @@ enum Palette {
         Color(hex: 0x42403C),  // older
     ]
 
+    /// Legend labels matching `age` index-for-index (tests pin the counts).
     static let ageLabels = ["This week", "This month", "This year", "1–2 years", "Older"]
 
     /// Top-12 extension slots + "everything else" grey (design EXTC values).
@@ -50,6 +99,10 @@ enum Palette {
         Color(hex: 0x6B7078),  // slot 12: everything else
     ]
 
+    /// The one treemap color decision: pick the channel's table and index
+    /// it with the rect's engine-assigned key. min()-clamps make unknown
+    /// future engine values fall into the last ("other"/"older") bucket
+    /// instead of trapping.
     static func color(for rect: TreemapRect, mode: ColorMode) -> Color {
         switch mode {
         case .kind:
@@ -61,6 +114,7 @@ enum Palette {
         }
     }
 
+    /// Kind color for non-rect UI (chips, swatches, capacity bar).
     static func color(for category: KindCategory) -> Color {
         kind[category] ?? kind[.other]!
     }
@@ -71,7 +125,10 @@ enum Palette {
     static let warning = Color(hex: 0xD9A05A)
 }
 
+// MARK: - Helpers
+
 extension Color {
+    /// Design-doc 0xRRGGBB literal, decoded as sRGB.
     init(hex: UInt32) {
         self.init(
             .sRGB,
@@ -83,6 +140,8 @@ extension Color {
 
 /// Byte formatting for UI labels; the engine hands us raw counts.
 enum ByteFormat {
+    /// Human-compact decimal-unit string: TB two decimals, GB one, MB/KB
+    /// none — precision scaled to how much users care at each magnitude.
     static func compact(_ bytes: UInt64) -> String {
         let gb = Double(bytes) / 1_000_000_000
         if gb >= 1000 { return String(format: "%.2f TB", gb / 1000) }

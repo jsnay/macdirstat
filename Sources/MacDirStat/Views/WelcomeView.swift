@@ -2,6 +2,48 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
+// =============================================================================
+// FILE: Sources/MacDirStat/Views/WelcomeView.swift
+// =============================================================================
+//
+// PURPOSE
+//   The first-run / empty-window surface (design 1f): "the window is the
+//   picker." Instead of a modal drive-selection dialog in front of an empty
+//   window, the empty state itself shows mounted volumes with real capacity
+//   bars (useful before any scan), a drop-anything target, recent scans,
+//   and the Full Disk Access ask — calmly, in context, before the first
+//   scan produces an embarrassing "unreadable" number.
+//
+// UPSTREAM DEPENDENCIES (what this file consumes)
+//   - Model/AppState.swift: startScan(path:volume:) — the only action this
+//     screen performs.
+//   - Model/Volumes.swift: VolumeInfo.mounted() for the volume rows (with
+//     capacity/free/low-space), RecentScans for the recents chips.
+//   - Model/Palette.swift: warning amber for the FDA banner, ByteFormat.
+//   - SwiftUI onDrop + UniformTypeIdentifiers (.fileURL) for the drop
+//     target; AppKit NSWorkspace to open the Full Disk Access pane.
+//
+// DOWNSTREAM CONSUMERS (who depends on this file)
+//   - MacDirStatApp.swift (RootView) shows WelcomeView for the .welcome
+//     phase; nothing else references it.
+//
+// STRUCTURE
+//   - WelcomeView: headline, volume rows, drop target, recents, FDA banner
+//   - dropTarget: dashed onDrop zone (loads a file URL, starts a scan)
+//   - fullDiskAccessBanner: the in-context permissions ask
+//   - abbreviate: home-relative path shortening for recents chips
+//   - VolumeRow: one volume card — icon, name, low-space badge, used bar,
+//     free-of-total line, Scan button
+//
+// BEHAVIOR & INVARIANTS
+//   - Volumes/recents load in onAppear, not init: cheap, and re-fetched
+//     each time the user returns to the picker.
+//   - The dropped-URL callback arrives off the main actor; the Task
+//     { @MainActor } hop before startScan keeps AppState main-isolated.
+//   - The low-space badge threshold lives in VolumeInfo.isLowOnSpace
+//     (<10% free) — the view only renders the fact.
+// =============================================================================
+
 /// First run: the window IS the picker (design 1f). No modal front door —
 /// volumes with real capacity bars, a drop-anything target, recents, and
 /// the Full Disk Access ask, all on one calm surface.

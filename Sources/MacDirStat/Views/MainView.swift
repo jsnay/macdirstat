@@ -1,6 +1,59 @@
 import AppKit
 import SwiftUI
 
+// =============================================================================
+// FILE: Sources/MacDirStat/Views/MainView.swift
+// =============================================================================
+//
+// PURPOSE
+//   The active window surface (design 1b): the evolved TWO-pane layout that
+//   replaces WinDirStat's three panes. Sidebar outline on the left; on the
+//   right a vertical stack of legend chips (the demoted type list), the
+//   dominant treemap, and the capacity footer with the Cleanup pill (1e).
+//   The toolbar doubles as the 1d scan surface: while scanning it shows the
+//   live progress cluster, afterwards the 1g color-channel control + search.
+//
+// UPSTREAM DEPENDENCIES (what this file consumes)
+//   - Model/AppState.swift: phase-independent state — rootName, isScanning,
+//     progress trio, canGoBack/Forward, colorMode, searchText, categories,
+//     isolatedCategory, reconciliation, selection, sizeMetric.
+//   - Model/CleanupStore.swift: items/total/lastReclaimed/reviewPresented
+//     for the pill, footer toast, and sheet presentation.
+//   - Views/SidebarOutline.swift, TreemapPane.swift, CleanupReviewSheet.swift,
+//     TypeTableSheet.swift: the embedded panes and sheets.
+//   - Model/Palette.swift: chip/bar colors, staged & warning ambers,
+//     ByteFormat.
+//   - AppKit: NSWorkspace to open the Full Disk Access settings pane.
+//
+// DOWNSTREAM CONSUMERS (who depends on this file)
+//   - MacDirStatApp.swift (RootView) shows MainView for the .active phase.
+//
+// STRUCTURE
+//   - MainView → MainContent: whole-surface layout + both sheets
+//   - ToolbarRow (+ NavChevron): zoom chevrons, title, scan cluster OR
+//     color-mode picker + search
+//   - ScanProgressCluster: the 1d determinate progress display
+//   - LegendChips (+ CategoryChip): click-to-isolate kind strip
+//   - FooterRow → FooterContent: capacity bar, free/unreadable line,
+//     reclaimed toast, selection readout, CleanupPill
+//   - CapacityBar + HatchedRectangle: per-kind capacity segments
+//   - CleanupPill: staged count + reclaim total + Review button
+//
+// BEHAVIOR & INVARIANTS
+//   - Observation topology: CleanupStore is a SEPARATE ObservableObject
+//     owned by AppState, and nested ObservableObjects do NOT republish
+//     through @EnvironmentObject — @EnvironmentObject only re-renders on
+//     AppState's own objectWillChange. So every view that must react to
+//     staging (MainContent's sheet, FooterContent's toast, CleanupPill's
+//     numbers) takes the store as an explicit @ObservedObject; the
+//     MainView/FooterRow wrappers exist only to perform that handoff.
+//   - The capacity bar is PHYSICAL-bytes only, whatever the sizeMetric:
+//     it reconciles against real disk capacity, and logical (apparent)
+//     sizes can exceed the disk (clones, cloud placeholders).
+//   - Free space and unknown are footer elements, not treemap nodes — the
+//     footer is what kills the <Free Space>/<Unknown> pseudo-nodes (1b).
+// =============================================================================
+
 /// The evolved layout (design 1b): two panes, not three. The outline is a
 /// Mac sidebar with one smart column; the treemap gets ~75% of the window;
 /// the type list is a 30 px chip strip; free space lives in the capacity
@@ -14,7 +67,10 @@ struct MainView: View {
 }
 
 /// Observes the CleanupStore directly: sheet presentation and map striping
-/// must re-render when items are staged.
+/// must re-render when items are staged. This is the @ObservedObject
+/// handoff described in the file header — without it, staging an item
+/// would not re-evaluate this body and the review sheet could never
+/// present from the store's own flag.
 private struct MainContent: View {
     @EnvironmentObject private var state: AppState
     @ObservedObject var cleanup: CleanupStore
@@ -44,12 +100,16 @@ private struct MainContent: View {
         }
     }
 
+    /// Explicit Binding into the store's published presentation flag
+    /// (equivalent to the projected binding, spelled out for clarity).
     private var cleanupBinding: Binding<Bool> {
         Binding(
             get: { cleanup.reviewPresented },
             set: { cleanup.reviewPresented = $0 })
     }
 }
+
+// MARK: - Toolbar
 
 /// The 1b toolbar: back/forward, title + used bytes, then either the 1d
 /// scan progress cluster (path, counters, determinate bar, Stop) or the
@@ -110,6 +170,7 @@ struct ToolbarRow: View {
         .background(Color(hex: 0x26272C))
     }
 
+    /// Root total in the current metric for the "N used" toolbar label.
     private var rootBytes: UInt64? {
         guard let model = state.model, model.root.isValid,
             let info = try? model.info(model.root)
@@ -118,6 +179,8 @@ struct ToolbarRow: View {
     }
 }
 
+/// One zoom-history chevron button (back/forward), dimmed when its stack
+/// is empty.
 private struct NavChevron: View {
     let symbol: String
     let enabled: Bool
@@ -135,6 +198,8 @@ private struct NavChevron: View {
         .opacity(enabled ? 1 : 0.4)
     }
 }
+
+// MARK: - Scan progress cluster (1d)
 
 /// 1d: determinate progress — the denominator (used bytes) is known before
 /// the scan starts; counters only go up.
@@ -171,6 +236,7 @@ struct ScanProgressCluster: View {
         .frame(maxWidth: 420)
     }
 
+    /// Home-relative abbreviation of the currently-scanned path.
     private var shortPath: String {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         let p = state.progressPath
@@ -178,8 +244,12 @@ struct ScanProgressCluster: View {
     }
 }
 
+// MARK: - Legend chips (1b)
+
 /// The type list demoted to a legend strip (1b): same click-to-isolate
 /// power, 30 px instead of a pane; the full table is one keystroke away.
+/// Clicking a chip toggles isolation (click again to clear); the treemap
+/// dims all other kinds while one is isolated.
 struct LegendChips: View {
     @EnvironmentObject private var state: AppState
 
@@ -208,8 +278,11 @@ struct LegendChips: View {
     }
 }
 
+/// One legend chip: color dot, kind label, byte total; accent-ringed
+/// while its kind is isolated.
 private struct CategoryChip: View {
     let stat: CategoryStat
+    /// Pre-selected for the current metric by the caller.
     let bytes: UInt64
     let isIsolated: Bool
     let action: () -> Void
@@ -240,9 +313,12 @@ private struct CategoryChip: View {
     }
 }
 
+// MARK: - Capacity footer + Cleanup pill
+
 /// The capacity footer (1b): free space as a segmented bar (kills the
 /// `<Free Space>` pseudo-node), the amber unreadable call-to-action (kills
 /// `<Unknown>`), the selection readout, and the Cleanup pill (1e).
+/// Thin wrapper whose only job is the @ObservedObject handoff below.
 struct FooterRow: View {
     @EnvironmentObject private var state: AppState
 
@@ -252,6 +328,8 @@ struct FooterRow: View {
 }
 
 /// Observes the CleanupStore directly so pill/count updates render.
+/// (Same topology reason as MainContent: store changes do not propagate
+/// through the AppState environment object.)
 private struct FooterContent: View {
     @EnvironmentObject private var state: AppState
     @ObservedObject var cleanup: CleanupStore

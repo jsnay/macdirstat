@@ -1,5 +1,37 @@
 import SwiftUI
 
+// =============================================================================
+// FILE: Sources/MacDirStat/Views/TypeTableSheet.swift
+// =============================================================================
+//
+// PURPOSE
+//   The full per-extension table, one keystroke away (⌘T). The design
+//   review demoted WinDirStat's always-on type pane to the legend chip
+//   strip ("a legend pretending to be a pane"); this sheet is the promised
+//   escape hatch that keeps the per-extension habit available on demand.
+//
+// UPSTREAM DEPENDENCIES (what this file consumes)
+//   - Model/AppState.swift: state.model (typeList + root info for the
+//     percent denominator), typeTablePresented toggled by the ⌘T command.
+//   - Engine/Engine.swift: TypeStat rows (ext, logical bytes, files, slot).
+//   - Model/Palette.swift: extensionSlots swatch colors, ByteFormat.
+//
+// DOWNSTREAM CONSUMERS (who depends on this file)
+//   - Views/MainView.swift presents this as the ⌘T sheet.
+//
+// STRUCTURE
+//   - TypeTableSheet: title + Done, then a Table of TypeStat rows
+//     (swatch, .ext, size, % of tree, file count)
+//
+// BEHAVIOR & INVARIANTS
+//   - Data is fetched on each body evaluation (typeList is a cheap
+//     engine aggregation); the sheet is transient, so no caching layer.
+//   - Sizes here are LOGICAL bytes — the engine's extension aggregation
+//     tracks logical only (physical-per-extension is an explicit
+//     deferral); the swatch colors match the treemap's extension channel
+//     exactly because both index Palette.extensionSlots by slot.
+// =============================================================================
+
 /// The full per-extension table, one keystroke away (⌘T). The always-on
 /// pane is gone (design 1b); this is the escape hatch that keeps the
 /// WinDirStat habit available.
