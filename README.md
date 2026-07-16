@@ -121,13 +121,29 @@ These bit us in field testing and are now handled deliberately:
 ## Testing & CI
 
 - Engine correctness (sizes, sorting, dedup, layout geometry) is proven in
-  dirstat-core's own 30-test suite and **not re-proven here**.
-- `Tests/MacDirStatTests` covers the pure app-side logic that guards user
-  safety: the system-path refusal rules (including the Data-volume
-  canonicalization), deletion hints, palette completeness.
+  dirstat-core's own suite and **not re-proven here**.
+- `EngineIntegrationTests` drives the **real engine through the Swift
+  wrapper** — scan → navigate → treemap layout + hit-test → refresh →
+  cancel → cleanup commit, plus AppState zoom/metric — with no mocks. The
+  wrapper is the highest-risk file in the app and both field bugs lived at
+  this seam, so this is the real integration proof (EVA-FFI-1).
+- `CleanupTests` covers the safety-critical pure logic: the system-path
+  refusal rules (including the Data-volume canonicalization), the
+  **TOCTOU-safe `FileIdentity`** (a replaced file / symlink swap is
+  detected before deletion), the **root-refusal** check, deletion hints,
+  byte formatting, volume routing, and palette completeness.
 - CI builds the real engine from a sibling checkout (matching branch, else
-  `main`) and runs `swift build` + `swift test` on a macOS runner — the FFI
-  seam is tested, never mocked.
+  `main`) and runs `swift build` + `swift test` on a macOS runner. All
+  third-party GitHub Actions are SHA-pinned.
+
+## Security posture
+
+Read/scan-only except for one guarded operation (Move to Trash). No network
+access, no shell execution, no third-party runtime dependencies. Deletion is
+staged, reviewed, Trash-only, and gated by: a system-path guard, refusal of
+non-UTF-8 names (whose lossy path could denote a different file), and a
+TOCTOU re-check of `(device, inode)` immediately before each trash. The app
+refuses to run as root. See the repo issues for the full threat model.
 
 ## License
 
