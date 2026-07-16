@@ -359,6 +359,33 @@ final class OutlineStore: ObservableObject {
         reload()
     }
 
+    func isExpanded(_ node: NodeID) -> Bool {
+        expanded.contains(node)
+    }
+
+    func setExpanded(_ node: NodeID, _ value: Bool) {
+        if value {
+            expanded.insert(node)
+        } else {
+            expanded.remove(node)
+        }
+        reload()
+    }
+
+    /// First (largest) child of an expanded row, for →-into navigation.
+    func firstChild(of node: NodeID) -> NodeID? {
+        guard let model else { return nil }
+        let sort: ChildSort = metric == .physical ? .physicalSize : .size
+        return model.children(of: node, sort: sort, descending: true).first
+    }
+
+    func parent(of node: NodeID) -> NodeID? {
+        guard let model, let info = try? model.info(node), info.parent.isValid else {
+            return nil
+        }
+        return info.parent
+    }
+
     func reveal(path: [NodeID]) {
         for ancestor in path.dropLast() {
             expanded.insert(ancestor)
