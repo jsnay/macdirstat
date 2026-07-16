@@ -204,15 +204,24 @@ final class EngineIntegrationTests: XCTestCase {
         let tree = TempTree("cleanup").file("keep.bin", 10_000).file("trash_me.bin", 90_000)
         let state = AppState()
         state.startScan(path: tree.root.path, volume: nil)
+        // Async @MainActor context: awaiting a sleep yields the main actor so
+        // the engine's marshalled progress callbacks drain (RunLoop.current is
+        // unavailable from async contexts).
         let deadline = Date().addingTimeInterval(10)
         while state.isScanning && Date() < deadline {
-            RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+            try await Task.sleep(for: .milliseconds(20))
         }
         guard let model = state.model else { return XCTFail("no model") }
         let target = model.children(of: model.root).first { model.name(of: $0) == "trash_me.bin" }!
 
+        // The staged total is PHYSICAL (allocated) bytes — block-rounded on
+        // APFS (90_000 logical → a multiple of the block size). Assert against
+        // the engine's own figure, not the apparent size, so the check is
+        // filesystem-tolerant.
+        let stagedPhysical = try model.info(target).physical
+        XCTAssertGreaterThanOrEqual(stagedPhysical, 90_000)
         XCTAssertEqual(state.cleanup.toggle(node: target, model: model), .staged)
-        XCTAssertEqual(state.cleanup.total, 90_000)
+        XCTAssertEqual(state.cleanup.total, stagedPhysical)
 
         let failures = await state.cleanup.commitToTrash(model: model)
         if failures.isEmpty {
