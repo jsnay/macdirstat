@@ -11,6 +11,27 @@ struct VolumeInfo: Identifiable, Equatable {
     let isInternal: Bool
 
     var id: String { url.path }
+
+    /// The path the engine should actually walk. For the boot volume this
+    /// is the APFS **Data** volume (`/System/Volumes/Data`): it holds all
+    /// user data on one device, and scanning it directly avoids traversing
+    /// the firmlinked directories (`/Users`, `/Applications`, …) twice —
+    /// the double-count that made a 256 GB disk read as a terabyte. The
+    /// sealed System volume's few GB are accounted via the capacity
+    /// reconciliation instead.
+    var scanPath: String {
+        if url.path == "/" {
+            var isDirectory: ObjCBool = false
+            let data = "/System/Volumes/Data"
+            if FileManager.default.fileExists(atPath: data, isDirectory: &isDirectory),
+                isDirectory.boolValue
+            {
+                return data
+            }
+        }
+        return url.path
+    }
+
     var used: UInt64 { total > free ? total - free : 0 }
     var usedFraction: Double { total > 0 ? Double(used) / Double(total) : 0 }
     var freeFraction: Double { total > 0 ? Double(free) / Double(total) : 0 }
@@ -26,6 +47,9 @@ struct VolumeInfo: Identifiable, Equatable {
             FileManager.default.mountedVolumeURLs(
                 includingResourceValuesForKeys: keys, options: [.skipHiddenVolumes]) ?? []
         return urls.compactMap { url in
+            // The APFS volume-group service volumes (Data/VM/Preboot/…)
+            // are surfaced through the boot volume row, never separately.
+            if url.path.hasPrefix("/System/Volumes/") { return nil }
             guard let values = try? url.resourceValues(forKeys: Set(keys)),
                 values.volumeIsBrowsable ?? false,
                 let total = values.volumeTotalCapacity, total > 0

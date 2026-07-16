@@ -94,6 +94,8 @@ private struct SidebarContent: View {
         if row.isDirectory {
             Button("Zoom Into Subtree") { state.zoomInto(row.node) }
         }
+        Button("Re-scan From Here") { state.rescan(row.node) }
+            .disabled(state.isScanning || state.isRefreshing)
         Button(
             state.cleanup.stagedNodes.contains(row.node)
                 ? "Remove from Cleanup" : "Add to Cleanup"

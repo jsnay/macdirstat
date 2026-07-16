@@ -48,6 +48,10 @@ final class AppState: ObservableObject {
     @Published private(set) var rootName: String = ""
     @Published private(set) var scanTargetPath: String = ""
     @Published var lastError: String?
+    /// A subtree re-scan ("Re-scan From Here") is in flight.
+    @Published private(set) var isRefreshing = false
+    /// What the user originally asked to scan, for Re-scan All.
+    private var lastRequest: (path: String, volume: VolumeInfo?)?
 
     let cleanup = CleanupStore()
     let outline = OutlineStore()
@@ -64,10 +68,30 @@ final class AppState: ObservableObject {
 
     // MARK: - Scan lifecycle
 
+    /// Directories the engine must never descend into. Exact-path matches,
+    /// so these only bite when scanning `/` on an older macOS layout; the
+    /// normal boot-volume path scans `/System/Volumes/Data` directly. The
+    /// engine additionally dedupes aliased directory inodes (firmlinks,
+    /// bind mounts) as defense in depth.
+    static let systemSkipPaths = [
+        "/System/Volumes/Data", "/System/Volumes/VM", "/System/Volumes/Preboot",
+        "/System/Volumes/Update", "/System/Volumes/Hardware", "/System/Volumes/iSCPreboot",
+        "/System/Volumes/xarts", "/Volumes", "/dev",
+    ]
+
     func startScan(path: String, volume: VolumeInfo?) {
         let volume = volume ?? VolumeInfo.containing(path: path)
+        lastRequest = (path, volume)
+        // Scanning "Macintosh HD" means scanning the APFS Data volume: all
+        // user data, one device, and no firmlink double-traversal (the bug
+        // that made a 256 GB disk read as a terabyte).
+        var target = path
+        if path == "/", let volume, volume.url.path == "/" {
+            target = volume.scanPath
+        }
         do {
-            let scan = try EngineScan(root: path) { [weak self] progress in
+            let scan = try EngineScan(root: target, skipPaths: Self.systemSkipPaths) {
+                [weak self] progress in
                 Task { @MainActor in self?.applyProgress(progress) }
             }
             self.scan = scan
@@ -76,8 +100,10 @@ final class AppState: ObservableObject {
             if let volume {
                 scan.model.setVolumeFigures(total: volume.total, free: volume.free)
             }
-            scanTargetPath = path
-            rootName = volume?.url.path == path ? (volume?.name ?? path) : (path as NSString).lastPathComponent
+            scanTargetPath = target
+            rootName =
+                volume?.url.path == path
+                ? (volume?.name ?? path) : (path as NSString).lastPathComponent
             phase = .active
             isScanning = true
             progressItems = 0
@@ -205,6 +231,38 @@ final class AppState: ObservableObject {
         layoutGeneration += 1
     }
 
+    // MARK: - Re-scan (for changes made outside the app)
+
+    /// Re-read one node and its subtree from disk — "Re-scan From Here",
+    /// for when the filesystem was changed in Finder or a terminal. Runs
+    /// off the main thread (the engine allows concurrent reads); every
+    /// pane reconciles when it lands.
+    func rescan(_ node: NodeID) {
+        guard let model, node.isValid, !isScanning, !isRefreshing else { return }
+        isRefreshing = true
+        Task.detached { [model] in
+            let failure: String?
+            do {
+                try model.refresh(node)
+                failure = nil
+            } catch {
+                failure = "\(error)"
+            }
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.isRefreshing = false
+                if let failure { self.lastError = "Re-scan failed: \(failure)" }
+                self.modelDidMutate()
+            }
+        }
+    }
+
+    /// Throw away the model and scan the original target again (⇧⌘R).
+    func rescanAll() {
+        guard let request = lastRequest, !isScanning else { return }
+        startScan(path: request.path, volume: request.volume)
+    }
+
     // MARK: - Actions
 
     func revealInFinder(_ node: NodeID) {
@@ -221,8 +279,13 @@ final class AppState: ObservableObject {
 
     func toggleCleanup(_ node: NodeID) {
         guard let model else { return }
-        if cleanup.toggle(node: node, model: model) == .refusedSystemCritical {
+        switch cleanup.toggle(node: node, model: model) {
+        case .refusedSystemCritical:
             lastError = "System-critical paths can’t be staged for cleanup."
+        case .failed:
+            lastError = "Couldn’t read that item’s details — try rescanning."
+        case .staged, .unstaged:
+            break
         }
     }
 

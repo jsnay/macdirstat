@@ -81,6 +81,15 @@ struct ToolbarRow: View {
                     .controlSize(.small)
                     .help("Stop keeps everything found so far")
             } else {
+                if state.isRefreshing {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("Re-scanning…")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.leading, 8)
+                }
                 Spacer()
                 Picker("", selection: $state.colorMode) {
                     ForEach(ColorMode.allCases) { mode in
