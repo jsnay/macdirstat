@@ -50,7 +50,8 @@ final class CleanupStore: ObservableObject {
                 node: node,
                 name: model.name(of: node),
                 path: path,
-                size: info.logical,
+                // Physical bytes: "frees N GB" is a promise about the disk.
+                size: info.physical,
                 category: info.category,
                 hint: CleanupHint.forPath(path)))
         return .staged
