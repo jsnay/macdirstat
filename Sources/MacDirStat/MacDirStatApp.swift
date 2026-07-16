@@ -1,8 +1,20 @@
 import AppKit
 import SwiftUI
 
+/// When launched as a bare SwiftPM executable (`swift run`) there is no app
+/// bundle, so macOS treats the process as a background tool: the menu bar
+/// stays owned by the launching app and no menus mount. Claiming regular
+/// activation explicitly fixes both (a bundled build is unaffected).
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+}
+
 @main
 struct MacDirStatApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var state = AppState()
 
     init() {
