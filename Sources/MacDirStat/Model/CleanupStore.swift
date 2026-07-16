@@ -30,6 +30,7 @@ final class CleanupStore: ObservableObject {
         case staged
         case unstaged
         case refusedSystemCritical
+        case failed
     }
 
     /// Toggle a node in/out of the cleanup list. System-critical paths
@@ -43,7 +44,7 @@ final class CleanupStore: ObservableObject {
         guard !CleanupGuard.isSystemCritical(path: path) else {
             return .refusedSystemCritical
         }
-        guard let info = try? model.info(node) else { return .refusedSystemCritical }
+        guard let info = try? model.info(node) else { return .failed }
         items.append(
             StagedItem(
                 node: node,
@@ -107,7 +108,21 @@ enum CleanupGuard {
         "/System/", "/usr/", "/bin/", "/sbin/", "/private/etc/",
     ]
 
+    /// The APFS Data volume re-exposes the user's world under
+    /// `/System/Volumes/Data/...`; judge those paths by their canonical
+    /// firmlinked location (`/Users/...`), or every real file would be
+    /// refused by the `/System/` rule.
+    static func canonicalize(_ path: String) -> String {
+        let dataPrefix = "/System/Volumes/Data"
+        if path == dataPrefix { return "/" }
+        if path.hasPrefix(dataPrefix + "/") {
+            return String(path.dropFirst(dataPrefix.count))
+        }
+        return path
+    }
+
     static func isSystemCritical(path: String) -> Bool {
+        let path = canonicalize(path)
         let clean = path.hasSuffix("/") && path.count > 1 ? String(path.dropLast()) : path
         if forbiddenExact.contains(clean) { return true }
         if forbiddenPrefixes.contains(where: { clean.hasPrefix($0) }) { return true }

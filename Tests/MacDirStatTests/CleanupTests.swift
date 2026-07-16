@@ -35,6 +35,26 @@ final class CleanupGuardTests: XCTestCase {
                 CleanupGuard.isSystemCritical(path: path), "\(path) must be stageable")
         }
     }
+
+    /// The APFS Data volume re-exposes user files under
+    /// /System/Volumes/Data/…; they must be judged by their canonical
+    /// location, not refused by the /System/ rule (the "even a .mov is
+    /// system-critical" bug).
+    func testDataVolumePathsJudgedCanonically() {
+        XCTAssertFalse(
+            CleanupGuard.isSystemCritical(
+                path: "/System/Volumes/Data/Users/alex/Movies/Old Render.mov"))
+        XCTAssertFalse(
+            CleanupGuard.isSystemCritical(
+                path: "/System/Volumes/Data/Users/alex/Library/Caches/com.foo"))
+        // The canonical guards still apply through the prefix.
+        XCTAssertTrue(CleanupGuard.isSystemCritical(path: "/System/Volumes/Data"))
+        XCTAssertTrue(CleanupGuard.isSystemCritical(path: "/System/Volumes/Data/Users"))
+        XCTAssertTrue(
+            CleanupGuard.isSystemCritical(path: "/System/Volumes/Data/private/etc/hosts"))
+        // Real System-volume paths remain refused.
+        XCTAssertTrue(CleanupGuard.isSystemCritical(path: "/System/Library/Kernels"))
+    }
 }
 
 final class CleanupHintTests: XCTestCase {

@@ -71,6 +71,9 @@ struct NodeInfo {
     let isDirectory: Bool
     let isSymlink: Bool
     let isUnreadable: Bool
+    /// Same directory inode already counted via another path (APFS
+    /// firmlink / bind mount); shown but contributes nothing.
+    let isAliasDuplicate: Bool
     let category: KindCategory
     let ageBucket: Int
     let extSlot: Int
@@ -88,6 +91,7 @@ struct NodeInfo {
         isDirectory = c.kind == 1
         isSymlink = c.kind == 2
         isUnreadable = c.flags & UInt32(DS_NODE_FLAG_UNREADABLE) != 0
+        isAliasDuplicate = c.flags & UInt32(DS_NODE_FLAG_DUPLICATE) != 0
         category = KindCategory(rawValue: c.category) ?? .other
         ageBucket = Int(c.age_bucket)
         extSlot = Int(c.ext_slot)
@@ -160,7 +164,13 @@ final class EngineScan {
 
     /// Progress callbacks arrive on engine threads; the wrapper marshals
     /// them to the main queue before they reach app state (APP-FFI-3).
-    init(root: String, onProgress: @escaping @Sendable (ScanProgress) -> Void) throws {
+    /// `skipPaths` are absolute directories the engine must not descend
+    /// into — platform knowledge the app supplies (the APFS volume-group
+    /// service paths, so firmlinked trees are never traversed twice).
+    init(
+        root: String, skipPaths: [String] = [],
+        onProgress: @escaping @Sendable (ScanProgress) -> Void
+    ) throws {
         Engine.verifyABI()
         let box = ProgressBox { progress in
             DispatchQueue.main.async { onProgress(progress) }
@@ -175,7 +185,13 @@ final class EngineScan {
             box.handler(
                 ScanProgress(items: items, bytes: bytes, currentPath: pathString, done: done == 1))
         }
-        guard let handle = root.withCString({ ds_scan_begin($0, nil, callback, user) }) else {
+        let handle: OpaquePointer? = Self.withCStringArray(skipPaths) { argv, count in
+            var options = DsScanOptions()
+            options.skip_paths = argv
+            options.skip_paths_len = count
+            return root.withCString { ds_scan_begin($0, &options, callback, user) }
+        }
+        guard let handle else {
             throw EngineError.fromEngine()
         }
         guard let modelPtr = ds_scan_model(handle) else {
@@ -196,6 +212,18 @@ final class EngineScan {
         ds_scan_cancel(handle)
         ds_scan_join(handle)
         ds_scan_free(handle)
+    }
+
+    /// Marshal a Swift string array as a `const char *const *` valid for
+    /// the duration of `body` (the engine copies during `ds_scan_begin`).
+    private static func withCStringArray<R>(
+        _ strings: [String], _ body: (UnsafePointer<UnsafePointer<CChar>?>?, Int) -> R
+    ) -> R {
+        guard !strings.isEmpty else { return body(nil, 0) }
+        let duplicated: [UnsafeMutablePointer<CChar>] = strings.map { strdup($0)! }
+        defer { duplicated.forEach { free($0) } }
+        let pointers: [UnsafePointer<CChar>?] = duplicated.map { UnsafePointer($0) }
+        return pointers.withUnsafeBufferPointer { body($0.baseAddress, strings.count) }
     }
 }
 
