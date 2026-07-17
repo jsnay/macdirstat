@@ -13,7 +13,7 @@ second.
 | APP-VIEW-3 (partial) | Light mode | The accepted 1b design ships dark; the review calls for a "light-mode pass on 1b" as a follow-up mock first. |
 | APP-TM-2/4 | Classic cushion shading | Design default is flat fills + hairlines + subtle gradient; "Classic cushions" returns as a view option with engine CORE-TM-3. |
 | APP-SCAN-5 | Save/open scans | Phase 5; engine save/reload is deferred too. |
-| APP-SCAN-6 | Scan report window | Errors are counted and retrievable via the wrapper (`scanReport`); a dedicated viewer UI is pending. The unreadable total already surfaces in the footer CTA. |
+| APP-SCAN-6 | Scan report window | Errors are counted and retrievable via the wrapper (`scanReport`); a dedicated viewer UI is pending. The failure count already drives the footer's Full Disk Access CTA. |
 | APP-PERM-2 | Security-scoped bookmarks | Needs sandboxed-build testing on real hardware; current build is unsandboxed dev-style. |
 | APP-TARGET-2/7 | "All local volumes" mode, multi-root models | 1f scans one volume/folder per window; engine multi-root is deferred. |
 | APP-DIR-3/COL | Column table view with header sorting | 1b's sidebar is the one-smart-column outline; the design puts full columns "behind a list-view toggle" — that toggle is the pending piece. |

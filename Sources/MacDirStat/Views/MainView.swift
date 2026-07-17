@@ -316,9 +316,10 @@ private struct CategoryChip: View {
 // MARK: - Capacity footer + Cleanup pill
 
 /// The capacity footer (1b): free space as a segmented bar (kills the
-/// `<Free Space>` pseudo-node), the amber unreadable call-to-action (kills
-/// `<Unknown>`), the selection readout, and the Cleanup pill (1e).
-/// Thin wrapper whose only job is the @ObservedObject handoff below.
+/// `<Free Space>` pseudo-node), the read-failure FDA call-to-action plus
+/// the neutral capacity-gap note (kills `<Unknown>` — see FooterIndicators
+/// for why they are two separate signals), the selection readout, and the
+/// Cleanup pill (1e). Thin wrapper for the @ObservedObject handoff below.
 struct FooterRow: View {
     @EnvironmentObject private var state: AppState
 
@@ -345,7 +346,14 @@ private struct FooterContent: View {
                             + Text(" free of \(ByteFormat.compact(rec.total))"))
                             .font(.system(size: 11))
                             .foregroundColor(.secondary)
-                        if rec.unknown > 1_000_000 {
+                        // Two independent indicators (app#13): the FDA CTA
+                        // fires on ACTUAL read failures from the scan
+                        // report; the capacity gap (snapshots, sibling
+                        // container volumes, purgeable) is informational
+                        // and no permission grant can clear it.
+                        if let cta = FooterIndicators.fdaMessage(
+                            errorCount: state.scanErrorCount)
+                        {
                             Button {
                                 let pane = URL(
                                     string:
@@ -353,13 +361,18 @@ private struct FooterContent: View {
                                 )!
                                 NSWorkspace.shared.open(pane)
                             } label: {
-                                Text(
-                                    "\(ByteFormat.compact(rec.unknown)) unreadable — Grant Full Disk Access…"
-                                )
-                                .font(.system(size: 11))
-                                .foregroundStyle(Palette.warning)
+                                Text(cta)
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(Palette.warning)
                             }
                             .buttonStyle(.plain)
+                        }
+                        if let gap = FooterIndicators.gapMessage(
+                            unknown: rec.unknown, isFullVolumeScan: state.isFullVolumeScan)
+                        {
+                            Text(gap)
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
                         }
                     } else {
                         Text("\(state.progressItems.formatted()) items")
@@ -413,7 +426,10 @@ struct CapacityBar: View {
                                 width: geo.size.width * CGFloat(stat.physical)
                                     / CGFloat(rec.total))
                     }
-                    if rec.unknown > 0 {
+                    // The hatched gap segment only means something for a
+                    // whole-volume scan; for a folder scan it would hatch
+                    // the entire rest of the disk (app#13).
+                    if rec.unknown > 0 && state.isFullVolumeScan {
                         HatchedRectangle()
                             .frame(width: geo.size.width * CGFloat(rec.unknown) / CGFloat(rec.total))
                     }
