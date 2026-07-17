@@ -117,12 +117,14 @@ final class CleanupStore: ObservableObject {
         // Non-UTF-8 names: the string path is lossy and could collide with a
         // different real file. Refuse destructive staging entirely (app#5).
         guard !info.hasNonUTF8Name else {
+            AppLog.log("cleanup", "refused non-UTF-8 name node=\(node.raw)")
             return .refusedUnsafeName
         }
         // Guard check runs on the engine's absolute path (canonicalized
         // inside the guard for Data-volume prefixes).
         let path = model.path(of: node)
         guard !CleanupGuard.isSystemCritical(path: path) else {
+            AppLog.log("cleanup", "refused system-critical path=\(path)")
             return .refusedSystemCritical
         }
         items.append(
@@ -172,6 +174,7 @@ final class CleanupStore: ObservableObject {
             // and require an identity match, or skip this item.
             let now = FileIdentity.lstat(item.path)
             guard let staged = item.identity, let now, now == staged else {
+                AppLog.log("cleanup", "TOCTOU trip: identity changed path=\(item.path)")
                 failures.append(
                     "\(item.path): changed on disk since you staged it — re-stage to delete")
                 continue
@@ -181,9 +184,13 @@ final class CleanupStore: ObservableObject {
                 try FileManager.default.trashItem(at: url, resultingItemURL: nil)
                 try? model.refresh(item.node)
             } catch {
+                AppLog.log("cleanup", "trash failed path=\(item.path) error=\(error.localizedDescription)")
                 failures.append("\(item.path): \(error.localizedDescription)")
             }
         }
+        AppLog.log(
+            "cleanup",
+            "commit items=\(items.count) reclaim=\(reclaim) failures=\(failures.count)")
         // The list clears even on partial failure: the failed paths are
         // reported via the returned array (AppState alerts), and stale
         // staged rows would point at nodes the engine just re-read anyway.

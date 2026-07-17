@@ -150,3 +150,67 @@ enum RecentScans {
         UserDefaults.standard.set(Array(recents.prefix(5)), forKey: key)
     }
 }
+
+// MARK: - Capacity-gap decomposition (app#17)
+
+/// The honest breakdown of the capacity gap (`total − free − measured`).
+/// On an APFS boot disk that gap is real data the scan can never see:
+/// sibling volumes in the container (sealed System, VM swap, Preboot,
+/// Update), purgeable space, and local Time Machine snapshots. `partition`
+/// is pure math (unit-tested); `gather` is the impure collector.
+struct CapacityBreakdown: Equatable {
+    /// Used bytes on the container's other volumes (boot-group scans only).
+    let systemVolumes: UInt64
+    /// macOS's own estimate of space it would free under pressure
+    /// (`…ForImportantUsage` minus strictly-free) — includes thinnable
+    /// snapshot space, evictable cloud files, disposable caches.
+    let purgeable: UInt64
+    /// Whatever the first two don't explain: snapshot blocks beyond the
+    /// purgeable estimate plus filesystem metadata. Deliberately a
+    /// remainder — per-snapshot "size" is ill-defined on APFS (shared
+    /// blocks), so we never pretend to a precision we don't have.
+    let snapshotsAndMetadata: UInt64
+
+    /// Clamp-partition `unknown` so the segments can never exceed it (the
+    /// inputs are estimates from different subsystems and may overlap).
+    static func partition(
+        unknown: UInt64, systemVolumesUsed: UInt64, purgeableEstimate: UInt64
+    ) -> CapacityBreakdown {
+        let sys = min(systemVolumesUsed, unknown)
+        let purge = min(purgeableEstimate, unknown - sys)
+        return CapacityBreakdown(
+            systemVolumes: sys,
+            purgeable: purge,
+            snapshotsAndMetadata: unknown - sys - purge)
+    }
+
+    /// Collect the inputs and partition. Sibling-volume figures only make
+    /// sense when the scan target is the boot volume group's Data volume;
+    /// for any other target the gap is purgeable + remainder.
+    static func gather(unknown: UInt64, scanTarget: String) -> CapacityBreakdown {
+        var sys: UInt64 = 0
+        if scanTarget == "/System/Volumes/Data" || scanTarget == "/" {
+            // statfs Used (f_blocks − f_bfree, in f_bsize units) matches
+            // df's per-volume Used column on APFS.
+            for mount in [
+                "/", "/System/Volumes/VM", "/System/Volumes/Preboot",
+                "/System/Volumes/Update", "/System/Volumes/Hardware",
+            ] {
+                var st = statfs()
+                if statfs(mount, &st) == 0, st.f_blocks >= st.f_bfree {
+                    sys += (st.f_blocks - st.f_bfree) &* UInt64(st.f_bsize)
+                }
+            }
+        }
+        var purge: UInt64 = 0
+        let vals = try? URL(fileURLWithPath: scanTarget).resourceValues(forKeys: [
+            .volumeAvailableCapacityForImportantUsageKey, .volumeAvailableCapacityKey,
+        ])
+        if let important = vals?.volumeAvailableCapacityForImportantUsage,
+            let avail = vals?.volumeAvailableCapacity, important > Int64(avail)
+        {
+            purge = UInt64(important - Int64(avail))
+        }
+        return partition(unknown: unknown, systemVolumesUsed: sys, purgeableEstimate: purge)
+    }
+}

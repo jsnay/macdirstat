@@ -22,10 +22,13 @@ WinDirStat-parity chrome:
   smart column (name + size + a %-of-root bar behind the row, largest
   first); the treemap gets ~75% of the window; the type list is a legend
   chip strip with click-to-isolate (full table on ⌘T); free space is the
-  capacity footer; `<Unknown>` splits into two honest footer signals — an
-  amber "N locations couldn't be read — Grant Full Disk Access" call-to-
-  action driven by actual scan errors, and a neutral capacity-gap note
-  ("N GB in snapshots, system volumes & purgeable space").
+  capacity footer; `<Unknown>` splits into two honest footer signals — a
+  read-failure line driven by actual scan errors (an amber "Grant Full
+  Disk Access" call-to-action only when the grant is really absent;
+  neutral "system-protected" wording once it's granted, since FDA lifts
+  TCC but never POSIX permissions), and a clickable capacity-gap note
+  ("N GB in snapshots, system volumes & purgeable space") that opens a
+  per-bucket breakdown popover.
 - **The scan is the show.** Determinate progress (bytes vs used-bytes,
   denominator known up front), counters that only go up, a map that
   subdivides on a ~2 s settle cadence with a hatched "still scanning"
@@ -96,8 +99,12 @@ macOS grants disk access per *responsible app*, so how you launch matters:
 
 Without the grant, protected areas (Mail, Messages, Time Machine locals,
 some caches) fail to read and surface as the amber "N locations couldn't
-be read" call-to-action in the footer — the math still reconciles, you
-just can't see inside them.
+be read — Grant Full Disk Access" call-to-action in the footer. With the
+grant, a couple hundred root-owned OS directories still fail — FDA lifts
+TCC protections, not POSIX permissions — so the footer switches to
+neutral "N system-protected locations couldn't be read" wording instead
+of pointing you at a pane that can't help. Either way the math
+reconciles; you just can't see inside them.
 
 ## macOS storage truths (why the numbers are the way they are)
 
@@ -130,6 +137,24 @@ These bit us in field testing and are now handled deliberately:
   Full Disk Access call-to-action for paths the scan actually failed to
   read.
 
+## Logging & diagnostics
+
+The app keeps a local trace log so field issues are diagnosable after the
+fact: `~/Library/Logs/MacDirStat/macdirstat-YYYY-MM-DD.log`, one file per
+day, mirrored to the unified log (subsystem `com.macdirstat.app`) for live
+Console.app debugging. Logged: scan lifecycle summaries (target, totals,
+durations, error counts), the capacity reconciliation and its breakdown,
+the Full Disk Access probe result, cleanup decisions (refusals, TOCTOU
+trips, per-item commit outcomes), and engine events routed through
+`ds_set_log_callback` (ABI v5). Volume is bounded — summaries and
+decisions, never per-file lines.
+
+**Retention**: files older than 90 days are deleted at launch, and the
+directory is capped at 50 MB (oldest first). **Privacy**: log lines
+contain scanned paths; they never leave the machine (the app has no
+network access) and expire on the schedule above. When filing an issue,
+attaching the latest log file is the single most useful thing you can do.
+
 ## Testing & CI
 
 - Engine correctness (sizes, sorting, dedup, layout geometry) is proven in
@@ -143,8 +168,10 @@ These bit us in field testing and are now handled deliberately:
   refusal rules (including the Data-volume canonicalization), the
   **TOCTOU-safe `FileIdentity`** (a replaced file / symlink swap is
   detected before deletion), the **root-refusal** check, deletion hints,
-  byte formatting, the footer's FDA-CTA/capacity-gap split, volume
-  routing, and palette completeness.
+  byte formatting, the footer's FDA-CTA/capacity-gap split (including the
+  granted-FDA "system-protected" wording), the capacity-gap partition
+  math, the log-retention pruning rules, volume routing, and palette
+  completeness.
 - CI builds the real engine from a sibling checkout (matching branch, else
   `main`) and runs `swift build` + `swift test` on a macOS runner. All
   third-party GitHub Actions are SHA-pinned.
@@ -156,7 +183,9 @@ access, no shell execution, no third-party runtime dependencies. Deletion is
 staged, reviewed, Trash-only, and gated by: a system-path guard, refusal of
 non-UTF-8 names (whose lossy path could denote a different file), and a
 TOCTOU re-check of `(device, inode)` immediately before each trash. The app
-refuses to run as root. See the repo issues for the full threat model.
+refuses to run as root. Diagnostic logs are local-only with bounded
+retention (see "Logging & diagnostics"). See the repo issues for the full
+threat model.
 
 ## License
 

@@ -334,6 +334,8 @@ struct FooterRow: View {
 private struct FooterContent: View {
     @EnvironmentObject private var state: AppState
     @ObservedObject var cleanup: CleanupStore
+    /// The #17 capacity-gap breakdown popover.
+    @State private var breakdownPresented = false
 
     var body: some View {
         HStack(alignment: .center, spacing: 14) {
@@ -346,33 +348,52 @@ private struct FooterContent: View {
                             + Text(" free of \(ByteFormat.compact(rec.total))"))
                             .font(.system(size: 11))
                             .foregroundColor(.secondary)
-                        // Two independent indicators (app#13): the FDA CTA
-                        // fires on ACTUAL read failures from the scan
-                        // report; the capacity gap (snapshots, sibling
-                        // container volumes, purgeable) is informational
-                        // and no permission grant can clear it.
-                        if let cta = FooterIndicators.fdaMessage(
-                            errorCount: state.scanErrorCount)
+                        // Two independent indicators (app#13/#19): read
+                        // failures become a Grant-FDA CTA only when the
+                        // grant is actually absent — with FDA in place the
+                        // remaining failures are POSIX-denied OS internals
+                        // and get neutral wording. The capacity gap
+                        // (snapshots, sibling container volumes, purgeable)
+                        // is informational; clicking it opens the #17
+                        // breakdown popover.
+                        if let indicator = FooterIndicators.readFailures(
+                            errorCount: state.scanErrorCount, fdaGranted: state.fdaGranted)
                         {
-                            Button {
-                                let pane = URL(
-                                    string:
-                                        "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
-                                )!
-                                NSWorkspace.shared.open(pane)
-                            } label: {
-                                Text(cta)
+                            if indicator.isCTA {
+                                Button {
+                                    let pane = URL(
+                                        string:
+                                            "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
+                                    )!
+                                    NSWorkspace.shared.open(pane)
+                                } label: {
+                                    Text(indicator.text)
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(Palette.warning)
+                                }
+                                .buttonStyle(.plain)
+                            } else {
+                                Text(indicator.text)
                                     .font(.system(size: 11))
-                                    .foregroundStyle(Palette.warning)
+                                    .foregroundStyle(.secondary)
                             }
-                            .buttonStyle(.plain)
                         }
                         if let gap = FooterIndicators.gapMessage(
                             unknown: rec.unknown, isFullVolumeScan: state.isFullVolumeScan)
                         {
-                            Text(gap)
-                                .font(.system(size: 11))
-                                .foregroundStyle(.secondary)
+                            Button {
+                                breakdownPresented.toggle()
+                            } label: {
+                                Text(gap)
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.secondary)
+                                    .underline(breakdownPresented)
+                            }
+                            .buttonStyle(.plain)
+                            .popover(isPresented: $breakdownPresented, arrowEdge: .top) {
+                                CapacityBreakdownPopover(
+                                    reconciliation: rec, breakdown: state.capacityBreakdown)
+                            }
                         }
                     } else {
                         Text("\(state.progressItems.formatted()) items")
@@ -426,12 +447,33 @@ struct CapacityBar: View {
                                 width: geo.size.width * CGFloat(stat.physical)
                                     / CGFloat(rec.total))
                     }
-                    // The hatched gap segment only means something for a
-                    // whole-volume scan; for a folder scan it would hatch
-                    // the entire rest of the disk (app#13).
+                    // The gap segments only mean something for a
+                    // whole-volume scan; for a folder scan they would fill
+                    // with the entire rest of the disk (app#13). Decomposed
+                    // per app#17: system volumes and purgeable as muted
+                    // fills, snapshots/metadata keep the hatch.
                     if rec.unknown > 0 && state.isFullVolumeScan {
-                        HatchedRectangle()
-                            .frame(width: geo.size.width * CGFloat(rec.unknown) / CGFloat(rec.total))
+                        if let b = state.capacityBreakdown {
+                            Rectangle()
+                                .fill(Palette.systemVolumes)
+                                .frame(
+                                    width: geo.size.width * CGFloat(b.systemVolumes)
+                                        / CGFloat(rec.total))
+                            Rectangle()
+                                .fill(Palette.purgeable)
+                                .frame(
+                                    width: geo.size.width * CGFloat(b.purgeable)
+                                        / CGFloat(rec.total))
+                            HatchedRectangle()
+                                .frame(
+                                    width: geo.size.width * CGFloat(b.snapshotsAndMetadata)
+                                        / CGFloat(rec.total))
+                        } else {
+                            HatchedRectangle()
+                                .frame(
+                                    width: geo.size.width * CGFloat(rec.unknown)
+                                        / CGFloat(rec.total))
+                        }
                     }
                     Spacer(minLength: 0)
                 }
@@ -440,6 +482,69 @@ struct CapacityBar: View {
             .clipShape(Capsule())
         }
         .frame(height: 8)
+    }
+}
+
+/// The #17 breakdown popover: where every byte of the disk is, including
+/// the ones no scan can reach, each with one line of what it means. Reads
+/// the breakdown from AppState; pure presentation.
+struct CapacityBreakdownPopover: View {
+    let reconciliation: VolumeReconciliation
+    /// Passed explicitly (not via environment) — NSPopover-backed content
+    /// has not always inherited environment objects reliably on macOS.
+    let breakdown: CapacityBreakdown?
+
+    var body: some View {
+        let rec = reconciliation
+        let b = breakdown
+        let measured = rec.total &- min(rec.total, rec.free &+ rec.unknown)
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Where the disk went")
+                .font(.system(size: 12, weight: .semibold))
+            row(
+                swatch: nil, label: "Your files (scanned)", bytes: measured,
+                note: "What the map and outline show.")
+            if let b {
+                row(
+                    swatch: Palette.systemVolumes, label: "System volumes", bytes: b.systemVolumes,
+                    note: "macOS itself: the sealed System volume, VM swap, Preboot/Update.")
+                row(
+                    swatch: Palette.purgeable, label: "Purgeable", bytes: b.purgeable,
+                    note: "Space macOS frees automatically under pressure: thinnable "
+                        + "Time Machine snapshots, evictable cloud files, disposable caches.")
+                row(
+                    swatch: nil, label: "Snapshots & metadata", bytes: b.snapshotsAndMetadata,
+                    note: "Local snapshot blocks beyond the purgeable estimate, plus "
+                        + "filesystem bookkeeping. Thinned automatically within ~24h.")
+            }
+            row(
+                swatch: nil, label: "Free", bytes: rec.free,
+                note: "Strictly free blocks (Finder's “available” adds purgeable).")
+            Text("No permission grant can surface system volumes, snapshots or purgeable space — they aren't files this user can read.")
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(14)
+        .frame(width: 340)
+    }
+
+    private func row(swatch: Color?, label: String, bytes: UInt64, note: String) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            HStack(spacing: 6) {
+                if let swatch {
+                    RoundedRectangle(cornerRadius: 2).fill(swatch).frame(width: 8, height: 8)
+                }
+                Text(label).font(.system(size: 11, weight: .medium))
+                Spacer()
+                Text(ByteFormat.compact(bytes))
+                    .font(.system(size: 11, weight: .semibold)).monospacedDigit()
+            }
+            Text(note)
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }
 
