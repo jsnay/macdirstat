@@ -22,8 +22,10 @@ WinDirStat-parity chrome:
   smart column (name + size + a %-of-root bar behind the row, largest
   first); the treemap gets ~75% of the window; the type list is a legend
   chip strip with click-to-isolate (full table on ⌘T); free space is the
-  capacity footer; `<Unknown>` is an amber "N GB unreadable — Grant Full
-  Disk Access" call-to-action.
+  capacity footer; `<Unknown>` splits into two honest footer signals — an
+  amber "N locations couldn't be read — Grant Full Disk Access" call-to-
+  action driven by actual scan errors, and a neutral capacity-gap note
+  ("N GB in snapshots, system volumes & purgeable space").
 - **The scan is the show.** Determinate progress (bytes vs used-bytes,
   denominator known up front), counters that only go up, a map that
   subdivides on a ~2 s settle cadence with a hatched "still scanning"
@@ -93,8 +95,9 @@ macOS grants disk access per *responsible app*, so how you launch matters:
   to be toggled off/on once since the binary identity changed.
 
 Without the grant, protected areas (Mail, Messages, Time Machine locals,
-some caches) are skipped and surface as the amber "N GB unreadable" figure
-in the footer — the math still reconciles, you just can't see inside them.
+some caches) fail to read and surface as the amber "N locations couldn't
+be read" call-to-action in the footer — the math still reconciles, you
+just can't see inside them.
 
 ## macOS storage truths (why the numbers are the way they are)
 
@@ -117,6 +120,15 @@ These bit us in field testing and are now handled deliberately:
   (`…ForImportantUsage`, which assumes purgeables get purged). If macOS says
   an update won't fit even though Finder shows space, hunting big
   *allocated* files here is what actually helps.
+- **Used-bytes will never equal the sum of your files.** The volume
+  figures macOS reports are container-wide, but a scan measures one
+  volume's files — the difference legitimately holds APFS local Time
+  Machine snapshots (often tens of GB), the sealed System volume, VM swap,
+  Preboot/Recovery/Update, and purgeable space. No permission grant can
+  surface any of it, which is why the footer labels this gap neutrally
+  ("in snapshots, system volumes & purgeable space") and reserves the
+  Full Disk Access call-to-action for paths the scan actually failed to
+  read.
 
 ## Testing & CI
 
@@ -131,7 +143,8 @@ These bit us in field testing and are now handled deliberately:
   refusal rules (including the Data-volume canonicalization), the
   **TOCTOU-safe `FileIdentity`** (a replaced file / symlink swap is
   detected before deletion), the **root-refusal** check, deletion hints,
-  byte formatting, volume routing, and palette completeness.
+  byte formatting, the footer's FDA-CTA/capacity-gap split, volume
+  routing, and palette completeness.
 - CI builds the real engine from a sibling checkout (matching branch, else
   `main`) and runs `swift build` + `swift test` on a macOS runner. All
   third-party GitHub Actions are SHA-pinned.

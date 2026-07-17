@@ -148,6 +148,13 @@ final class AppState: ObservableObject {
     @Published private(set) var categories: [CategoryStat] = []
     /// Engine capacity math for the footer bar; nil before figures exist.
     @Published private(set) var reconciliation: VolumeReconciliation?
+    /// Scan-report size: paths that actually FAILED to read. This — not the
+    /// capacity gap — is what drives the Full Disk Access CTA (app#13).
+    @Published private(set) var scanErrorCount: UInt64 = 0
+    /// True when the scan target is a volume mount point (vs a dropped
+    /// folder). Gates the capacity-gap indicator: for a folder scan the
+    /// "gap" is just the rest of the disk and means nothing (app#13).
+    @Published private(set) var isFullVolumeScan = false
     /// Toolbar title: the volume name, or the folder's last component.
     @Published private(set) var rootName: String = ""
     /// The path actually handed to the engine (may differ from what the
@@ -241,6 +248,18 @@ final class AppState: ObservableObject {
                 scan.model.setVolumeFigures(total: volume.total, free: volume.free)
             }
             scanTargetPath = target
+            // Whole-volume vs folder: compare the target against its own
+            // volume's mount point (resource values, not string prefixes —
+            // the Data-volume redirect makes prefix guesses wrong).
+            let mount = try? URL(fileURLWithPath: target)
+                .resourceValues(forKeys: [.volumeURLKey]).volume
+            // Trim a trailing "/" (but keep "/" itself) so a target like
+            // "/Volumes/Backup/" still matches its mount-point path.
+            let cleanTarget =
+                target.hasSuffix("/") && target.count > 1
+                ? String(target.dropLast()) : target
+            isFullVolumeScan = mount?.path == cleanTarget
+            scanErrorCount = 0
             rootName =
                 volume?.url.path == path
                 ? (volume?.name ?? path) : (path as NSString).lastPathComponent
@@ -351,6 +370,7 @@ final class AppState: ObservableObject {
         guard let model else { return }
         categories = model.categoryList()
         reconciliation = model.volumeReconciliation
+        scanErrorCount = model.stats.errorCount
     }
 
     /// Called after cleanup commits so every pane reconciles (1e).

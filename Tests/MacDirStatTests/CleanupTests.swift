@@ -208,6 +208,44 @@ final class ByteFormatTests: XCTestCase {
     }
 }
 
+// MARK: - FooterIndicators (app#13)
+
+/// The field bug: with FDA granted, the footer showed "72.3 GB unreadable —
+/// Grant Full Disk Access" — but that number was the APFS capacity gap
+/// (snapshots, sibling container volumes, purgeable), which no permission
+/// grant can clear. The CTA must key off actual read failures; the gap
+/// gets a neutral label and only for whole-volume scans.
+final class FooterIndicatorTests: XCTestCase {
+    func testNoErrorsMeansNoCTARegardlessOfGap() {
+        XCTAssertNil(FooterIndicators.fdaMessage(errorCount: 0))
+    }
+
+    func testCTACountsLocationsNotBytes() {
+        XCTAssertEqual(
+            FooterIndicators.fdaMessage(errorCount: 1),
+            "1 location couldn't be read — Grant Full Disk Access…")
+        XCTAssertEqual(
+            FooterIndicators.fdaMessage(errorCount: 12),
+            "12 locations couldn't be read — Grant Full Disk Access…")
+    }
+
+    func testGapIsNeutralAndNamesTheRealCauses() {
+        let gap = FooterIndicators.gapMessage(
+            unknown: 72_300_000_000, isFullVolumeScan: true)
+        XCTAssertEqual(gap, "72.3 GB in snapshots, system volumes & purgeable space")
+        XCTAssertFalse(gap!.contains("Full Disk Access"), "the gap must never be a CTA")
+    }
+
+    func testGapHiddenForFolderScans() {
+        XCTAssertNil(
+            FooterIndicators.gapMessage(unknown: 500_000_000_000, isFullVolumeScan: false))
+    }
+
+    func testNegligibleGapHidden() {
+        XCTAssertNil(FooterIndicators.gapMessage(unknown: 900_000_000, isFullVolumeScan: true))
+    }
+}
+
 // MARK: - VolumeInfo logic
 
 final class VolumeInfoTests: XCTestCase {

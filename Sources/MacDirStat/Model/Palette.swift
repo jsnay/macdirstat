@@ -151,3 +151,33 @@ enum ByteFormat {
         return String(format: "%.0f KB", Double(bytes) / 1000)
     }
 }
+
+/// Pure decision logic for the capacity footer's two indicators (issue
+/// app#13). The two signals are deliberately independent, because they
+/// answer different questions:
+///
+/// - The **Full Disk Access CTA** answers "did the scan hit permission
+///   walls?" — and the only honest evidence for that is the engine's scan
+///   report (paths that actually failed to read). Bytes behind an
+///   unreadable directory are unknowable by definition, so this indicator
+///   speaks in location counts, never bytes.
+/// - The **capacity gap** answers "why doesn't measured + free equal the
+///   disk?" — and on an APFS boot disk the honest answer is snapshots,
+///   sibling volumes in the container (System/VM/Preboot/…), and purgeable
+///   space, which no permission grant can surface. It is informational,
+///   never a call to action, and only meaningful when a whole volume was
+///   scanned (for a folder scan the "gap" is just the rest of the disk).
+enum FooterIndicators {
+    /// Amber CTA text, or nil when the scan hit no read failures.
+    static func fdaMessage(errorCount: UInt64) -> String? {
+        guard errorCount > 0 else { return nil }
+        let noun = errorCount == 1 ? "location" : "locations"
+        return "\(errorCount) \(noun) couldn't be read — Grant Full Disk Access…"
+    }
+
+    /// Neutral gap attribution, or nil for folder scans / negligible gaps.
+    static func gapMessage(unknown: UInt64, isFullVolumeScan: Bool) -> String? {
+        guard isFullVolumeScan, unknown > 1_000_000_000 else { return nil }
+        return "\(ByteFormat.compact(unknown)) in snapshots, system volumes & purgeable space"
+    }
+}
