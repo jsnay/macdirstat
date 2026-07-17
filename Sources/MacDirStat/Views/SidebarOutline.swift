@@ -77,12 +77,34 @@ private struct SidebarContent: View {
             ScrollViewReader { proxy in
                 List(selection: selectionBinding) {
                     ForEach(filteredRows) { row in
-                        OutlineRowView(row: row)
-                            .tag(row.node)
-                            .id(row.node.raw)
-                            .listRowInsets(EdgeInsets(top: 0, leading: 6, bottom: 0, trailing: 6))
+                        if row.tailCount > 0 {
+                            // Inner-level truncation indicator (app#22):
+                            // count-only, click to un-truncate that level.
+                            Button {
+                                outline.uncap(row.node)
+                            } label: {
+                                Text("…and \(row.tailCount) more")
+                                    .font(.system(size: 11))
+                                    .italic()
+                                    .foregroundStyle(.secondary)
+                                    .padding(.leading, CGFloat(6 + row.depth * 13))
+                            }
+                            .buttonStyle(.plain)
+                            .id(row.id)
+                            .listRowInsets(
+                                EdgeInsets(top: 0, leading: 6, bottom: 0, trailing: 6)
+                            )
                             .listRowSeparator(.hidden)
-                            .contextMenu { rowMenu(row) }
+                        } else {
+                            OutlineRowView(row: row)
+                                .tag(row.node)
+                                .id(row.node.raw)
+                                .listRowInsets(
+                                    EdgeInsets(top: 0, leading: 6, bottom: 0, trailing: 6)
+                                )
+                                .listRowSeparator(.hidden)
+                                .contextMenu { rowMenu(row) }
+                        }
                     }
                 }
                 .listStyle(.sidebar)

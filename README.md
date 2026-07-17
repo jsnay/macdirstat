@@ -161,7 +161,8 @@ attaching the latest log file is the single most useful thing you can do.
   dirstat-core's own suite and **not re-proven here**.
 - `EngineIntegrationTests` drives the **real engine through the Swift
   wrapper** — scan → navigate → treemap layout + hit-test → refresh →
-  cancel → cleanup commit, plus AppState zoom/metric — with no mocks. The
+  cancel → cleanup commit, plus AppState zoom/metric and the outline's
+  reveal-past-the-cap behavior — with no mocks. The
   wrapper is the highest-risk file in the app and both field bugs lived at
   this seam, so this is the real integration proof (EVA-FFI-1).
 - `CleanupTests` covers the safety-critical pure logic: the system-path
