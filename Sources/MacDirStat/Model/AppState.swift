@@ -155,6 +155,12 @@ final class AppState: ObservableObject {
     /// folder). Gates the capacity-gap indicator: for a folder scan the
     /// "gap" is just the rest of the disk and means nothing (app#13).
     @Published private(set) var isFullVolumeScan = false
+    /// FDA probe result at scan start (app#19): decides whether read
+    /// failures get the amber Grant-FDA CTA (nil/false) or the neutral
+    /// "system-protected" wording (true). nil = probe inconclusive.
+    @Published private(set) var fdaGranted: Bool?
+    /// Decomposition of the capacity gap for the footer popover (app#17).
+    @Published private(set) var capacityBreakdown: CapacityBreakdown?
     /// Toolbar title: the volume name, or the folder's last component.
     @Published private(set) var rootName: String = ""
     /// The path actually handed to the engine (may differ from what the
@@ -260,9 +266,19 @@ final class AppState: ObservableObject {
                 ? String(target.dropLast()) : target
             isFullVolumeScan = mount?.path == cleanTarget
             scanErrorCount = 0
+            fdaGranted = FullDiskAccess.probe()
+            // Whole-volume scans title as the volume; folder scans as the
+            // folder. Decided by the mount-point comparison above, NOT by
+            // volume.url == path — VolumeInfo.containing sets url to the
+            // folder itself, which made every dropped folder claim the
+            // volume's name (app#15).
             rootName =
-                volume?.url.path == path
+                isFullVolumeScan
                 ? (volume?.name ?? path) : (path as NSString).lastPathComponent
+            AppLog.log(
+                "scan",
+                "start target=\(target) fullVolume=\(isFullVolumeScan) "
+                    + "fda=\(String(describing: fdaGranted)) volume=\(volume?.name ?? "-")")
             // Reset every piece of per-scan view state: old NodeIDs belong
             // to the replaced model and must not survive (APP-FFI-4).
             phase = .active
@@ -289,6 +305,7 @@ final class AppState: ObservableObject {
     /// engine's final done=true callback flows through applyProgress →
     /// finishScan, which is what flips `isScanning` off.
     func stopScan() {
+        AppLog.log("scan", "stop requested")
         scan?.cancel()
     }
 
@@ -337,6 +354,20 @@ final class AppState: ObservableObject {
         refreshAggregates()
         layoutGeneration += 1
         outline.reload()
+        // One reconciliation summary per scan — the #13/#19 class of bug
+        // becomes diagnosable from a log file alone.
+        if let rec = reconciliation {
+            let b = capacityBreakdown
+            AppLog.log(
+                "scan",
+                "done items=\(progressItems) bytes=\(progressBytes) errors=\(scanErrorCount) "
+                    + "total=\(rec.total) free=\(rec.free) unknown=\(rec.unknown) "
+                    + "sysVols=\(b?.systemVolumes ?? 0) purgeable=\(b?.purgeable ?? 0) "
+                    + "snapMeta=\(b?.snapshotsAndMetadata ?? 0)")
+        } else {
+            AppLog.log(
+                "scan", "done items=\(progressItems) bytes=\(progressBytes) errors=\(scanErrorCount)")
+        }
     }
 
     /// The ~2s settle cadence (1d): the map subdivides on a timer, not per
@@ -370,7 +401,13 @@ final class AppState: ObservableObject {
         guard let model else { return }
         categories = model.categoryList()
         reconciliation = model.volumeReconciliation
-        scanErrorCount = model.stats.errorCount
+        // Guard the assignment: equal values still fire objectWillChange on
+        // @Published, and this one is usually static at 0 (app#16).
+        let errors = model.stats.errorCount
+        if errors != scanErrorCount { scanErrorCount = errors }
+        capacityBreakdown = reconciliation.map {
+            CapacityBreakdown.gather(unknown: $0.unknown, scanTarget: scanTargetPath)
+        }
     }
 
     /// Called after cleanup commits so every pane reconciles (1e).

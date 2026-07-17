@@ -123,6 +123,11 @@ enum Palette {
     static let staged = Color(hex: 0xFFB340)
     /// The "unreadable — grant Full Disk Access" amber.
     static let warning = Color(hex: 0xD9A05A)
+    /// Capacity-bar gap segments (app#17): muted on purpose — this is
+    /// context, not content. System volumes darkest, purgeable lighter;
+    /// snapshots/metadata keep the hatched treatment.
+    static let systemVolumes = Color(hex: 0x4A4D55)
+    static let purgeable = Color(hex: 0x5C6670)
 }
 
 // MARK: - Helpers
@@ -168,11 +173,30 @@ enum ByteFormat {
 ///   never a call to action, and only meaningful when a whole volume was
 ///   scanned (for a folder scan the "gap" is just the rest of the disk).
 enum FooterIndicators {
-    /// Amber CTA text, or nil when the scan hit no read failures.
-    static func fdaMessage(errorCount: UInt64) -> String? {
+    /// The read-failure line: text plus whether it's a call to action.
+    struct ReadFailureIndicator: Equatable {
+        let text: String
+        let isCTA: Bool
+    }
+
+    /// Decide the read-failure indicator (app#13 + app#19). FDA lifts TCC
+    /// protections only — never POSIX permissions — so a boot-volume scan
+    /// always fails on a few hundred root-owned directories even with the
+    /// grant in place. When the probe says FDA is granted, those failures
+    /// get neutral "system-protected" wording; the amber Grant-FDA CTA is
+    /// reserved for when the grant is absent (or the probe is inconclusive
+    /// — pointing at the pane is the safe default then).
+    static func readFailures(errorCount: UInt64, fdaGranted: Bool?) -> ReadFailureIndicator? {
         guard errorCount > 0 else { return nil }
         let noun = errorCount == 1 ? "location" : "locations"
-        return "\(errorCount) \(noun) couldn't be read — Grant Full Disk Access…"
+        if fdaGranted == true {
+            return ReadFailureIndicator(
+                text: "\(errorCount) system-protected \(noun) couldn't be read",
+                isCTA: false)
+        }
+        return ReadFailureIndicator(
+            text: "\(errorCount) \(noun) couldn't be read — Grant Full Disk Access…",
+            isCTA: true)
     }
 
     /// Neutral gap attribution, or nil for folder scans / negligible gaps.

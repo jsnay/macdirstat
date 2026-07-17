@@ -56,6 +56,34 @@ enum SecurityChecks {
     }
 }
 
+/// Detects whether Full Disk Access appears granted (app#19), by probing
+/// TCC-guarded canary directories in the user's own Library. These are
+/// POSIX-readable (user-owned), so a listing succeeds exactly when TCC
+/// allows it — which is what the FDA grant controls. The result decides
+/// whether read failures get the amber "Grant Full Disk Access" CTA or
+/// the neutral "system-protected" wording: FDA lifts TCC only, never
+/// POSIX permissions, so with the grant in place the CTA would be
+/// pointing at a fix that cannot work.
+enum FullDiskAccess {
+    /// true / false when a canary settles it; nil when no canary exists
+    /// (callers treat nil as "not granted" — the CTA is the safe default).
+    static func probe(home: String = NSHomeDirectory()) -> Bool? {
+        // Every account has ~/Library/Safari; Mail/Messages when used.
+        for rel in ["/Library/Safari", "/Library/Mail", "/Library/Messages"] {
+            let dir = home + rel
+            var isDir: ObjCBool = false
+            guard
+                FileManager.default.fileExists(atPath: dir, isDirectory: &isDir),
+                isDir.boolValue
+            else { continue }
+            // The directory exists and is ours; listing it succeeds iff
+            // TCC (i.e. the FDA grant) allows.
+            return (try? FileManager.default.contentsOfDirectory(atPath: dir)) != nil
+        }
+        return nil
+    }
+}
+
 // MARK: - AppDelegate (activation quirk + root refusal)
 
 /// When launched as a bare SwiftPM executable (`swift run`) there is no app
@@ -66,6 +94,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Refuse to run as root (app#9): alert, then exit before any scan.
         if SecurityChecks.isRunningAsRoot(euid: geteuid()) {
+            AppLog.log("launch", "refused: running as root (euid 0)")
             let alert = NSAlert()
             alert.messageText = "MacDirStat can’t run as root"
             alert.informativeText =
@@ -75,6 +104,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             alert.runModal()
             exit(1)
         }
+        // Observability (app#20): bounded local logs, engine events routed
+        // into them, expired files pruned before anything else writes.
+        AppLog.pruneAtLaunch()
+        Engine.installLogBridge()
+        AppLog.log(
+            "launch",
+            "abi=\(Engine.abiVersion) fdaProbe=\(String(describing: FullDiskAccess.probe()))")
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
     }

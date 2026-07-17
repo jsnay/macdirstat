@@ -85,6 +85,23 @@ enum Engine {
         )
     }
 
+    /// The linked library's ABI version, for the launch log line.
+    static var abiVersion: UInt32 { ds_abi_version() }
+
+    /// Route engine lifecycle events (ds_set_log_callback, ABI v5) into
+    /// AppLog (app#20). The C callback fires on ENGINE WORKER THREADS and
+    /// must be cheap and non-throwing — AppLog.log satisfies both (unified
+    /// log write + async enqueue). The closure captures nothing, which is
+    /// what lets Swift convert it to a C function pointer.
+    static func installLogBridge() {
+        ds_set_log_callback(
+            { level, msg, _ in
+                guard let msg else { return }
+                let text = String(cString: msg)
+                AppLog.log(level >= 2 ? "engine.warn" : "engine", text)
+            }, nil)
+    }
+
     /// Engine errors surface as Swift errors with detail (APP-FFI-5).
     ///
     /// Uses the same two-call size-then-fill pattern as `stringCall` below:

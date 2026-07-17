@@ -216,17 +216,34 @@ final class ByteFormatTests: XCTestCase {
 /// grant can clear. The CTA must key off actual read failures; the gap
 /// gets a neutral label and only for whole-volume scans.
 final class FooterIndicatorTests: XCTestCase {
-    func testNoErrorsMeansNoCTARegardlessOfGap() {
-        XCTAssertNil(FooterIndicators.fdaMessage(errorCount: 0))
+    func testNoErrorsMeansNoIndicatorRegardlessOfGrant() {
+        XCTAssertNil(FooterIndicators.readFailures(errorCount: 0, fdaGranted: nil))
+        XCTAssertNil(FooterIndicators.readFailures(errorCount: 0, fdaGranted: true))
+        XCTAssertNil(FooterIndicators.readFailures(errorCount: 0, fdaGranted: false))
     }
 
     func testCTACountsLocationsNotBytes() {
+        let one = FooterIndicators.readFailures(errorCount: 1, fdaGranted: false)
+        XCTAssertEqual(one?.text, "1 location couldn't be read — Grant Full Disk Access…")
+        XCTAssertEqual(one?.isCTA, true)
+        let many = FooterIndicators.readFailures(errorCount: 12, fdaGranted: false)
+        XCTAssertEqual(many?.text, "12 locations couldn't be read — Grant Full Disk Access…")
+    }
+
+    /// The round-2 field bug (app#19): FDA granted, 217 root-owned dirs
+    /// still unreadable — the CTA must NOT appear; neutral wording does.
+    func testGrantedFDAMakesFailuresNeutralNotCTA() {
+        let ind = FooterIndicators.readFailures(errorCount: 217, fdaGranted: true)
+        XCTAssertEqual(ind?.isCTA, false)
+        XCTAssertEqual(ind?.text, "217 system-protected locations couldn't be read")
+        XCTAssertFalse(ind!.text.contains("Full Disk Access"))
+    }
+
+    /// Inconclusive probe defaults to the CTA — pointing at the pane is
+    /// the safe direction when we can't tell.
+    func testInconclusiveProbeDefaultsToCTA() {
         XCTAssertEqual(
-            FooterIndicators.fdaMessage(errorCount: 1),
-            "1 location couldn't be read — Grant Full Disk Access…")
-        XCTAssertEqual(
-            FooterIndicators.fdaMessage(errorCount: 12),
-            "12 locations couldn't be read — Grant Full Disk Access…")
+            FooterIndicators.readFailures(errorCount: 3, fdaGranted: nil)?.isCTA, true)
     }
 
     func testGapIsNeutralAndNamesTheRealCauses() {
@@ -243,6 +260,95 @@ final class FooterIndicatorTests: XCTestCase {
 
     func testNegligibleGapHidden() {
         XCTAssertNil(FooterIndicators.gapMessage(unknown: 900_000_000, isFullVolumeScan: true))
+    }
+}
+
+// MARK: - CapacityBreakdown (app#17)
+
+/// The clamped partition of the capacity gap. Inputs come from different
+/// subsystems (statfs, resource values) and may overlap or overshoot; the
+/// partition must never let the segments exceed the gap.
+final class CapacityBreakdownTests: XCTestCase {
+    func testPartitionAllFits() {
+        let b = CapacityBreakdown.partition(
+            unknown: 100, systemVolumesUsed: 30, purgeableEstimate: 50)
+        XCTAssertEqual(b.systemVolumes, 30)
+        XCTAssertEqual(b.purgeable, 50)
+        XCTAssertEqual(b.snapshotsAndMetadata, 20)
+    }
+
+    func testSystemVolumesClampToGap() {
+        let b = CapacityBreakdown.partition(
+            unknown: 25, systemVolumesUsed: 40, purgeableEstimate: 10)
+        XCTAssertEqual(b.systemVolumes, 25)
+        XCTAssertEqual(b.purgeable, 0)
+        XCTAssertEqual(b.snapshotsAndMetadata, 0)
+    }
+
+    func testPurgeableClampsToRemainder() {
+        let b = CapacityBreakdown.partition(
+            unknown: 60, systemVolumesUsed: 40, purgeableEstimate: 100)
+        XCTAssertEqual(b.systemVolumes, 40)
+        XCTAssertEqual(b.purgeable, 20)
+        XCTAssertEqual(b.snapshotsAndMetadata, 0)
+    }
+
+    func testSegmentsAlwaysSumToGap() {
+        for (unknown, sys, purge) in
+            [(0 as UInt64, 0 as UInt64, 0 as UInt64), (73_600_000_000, 14_000_000_000, 30_000_000_000),
+             (10, 100, 100), (5, 0, 100)]
+        {
+            let b = CapacityBreakdown.partition(
+                unknown: unknown, systemVolumesUsed: sys, purgeableEstimate: purge)
+            XCTAssertEqual(
+                b.systemVolumes + b.purgeable + b.snapshotsAndMetadata, unknown,
+                "partition must be exact for (\(unknown), \(sys), \(purge))")
+        }
+    }
+}
+
+// MARK: - AppLog retention (app#20)
+
+/// The pure pruning decision: 90-day retention plus a size cap, and we
+/// only ever delete files whose names we provably wrote.
+final class AppLogTests: XCTestCase {
+    private let day: TimeInterval = 86_400
+    private var now: Date { AppLog.date(fromFileName: "macdirstat-2026-07-17.log")! }
+
+    private func name(daysAgo: Int) -> String {
+        AppLog.fileName(for: now.addingTimeInterval(-Double(daysAgo) * day))
+    }
+
+    func testFileNameRoundTrip() {
+        XCTAssertEqual(AppLog.fileName(for: now), "macdirstat-2026-07-17.log")
+        XCTAssertEqual(AppLog.date(fromFileName: "macdirstat-2026-07-17.log"), now)
+        XCTAssertNil(AppLog.date(fromFileName: "something-else.log"))
+        XCTAssertNil(AppLog.date(fromFileName: "macdirstat-garbage.log"))
+    }
+
+    func testExpiredFilesPruned() {
+        let doomed = AppLog.filesToPrune(
+            files: [
+                (name(daysAgo: 91), 100), (name(daysAgo: 89), 100), (name(daysAgo: 0), 100),
+            ],
+            now: now, retentionDays: 90, sizeCap: 1_000_000)
+        XCTAssertEqual(doomed, [name(daysAgo: 91)])
+    }
+
+    func testSizeCapDropsOldestFirst() {
+        let doomed = AppLog.filesToPrune(
+            files: [
+                (name(daysAgo: 3), 400), (name(daysAgo: 2), 400), (name(daysAgo: 1), 400),
+            ],
+            now: now, retentionDays: 90, sizeCap: 800)
+        XCTAssertEqual(doomed, [name(daysAgo: 3)])
+    }
+
+    func testForeignFilesNeverPruned() {
+        let doomed = AppLog.filesToPrune(
+            files: [("notes.txt", 999_999_999), (name(daysAgo: 200), 10)],
+            now: now, retentionDays: 90, sizeCap: 100)
+        XCTAssertEqual(doomed, [name(daysAgo: 200)])
     }
 }
 
