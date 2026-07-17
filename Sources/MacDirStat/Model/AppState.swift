@@ -575,13 +575,27 @@ final class OutlineStore: ObservableObject {
         let isDirectory: Bool
         let hasChildren: Bool
         let isExpanded: Bool
-        var id: UInt64 { node.raw }
+        /// > 0 marks this as an "…and N more" summary row for a truncated
+        /// inner level (`node` is then the PARENT whose children were
+        /// capped); clicking it uncaps that parent (app#22). 0 = a normal
+        /// node row.
+        var tailCount: Int = 0
+        /// Tail rows share `node` with the parent's own row, so their id
+        /// gets the (otherwise unused) top bit to stay unique in ForEach.
+        var id: UInt64 { tailCount > 0 ? node.raw | (1 << 63) : node.raw }
     }
 
     /// The flattened visible rows, in display order (depth-first).
     @Published private(set) var rows: [Row] = []
     /// Which nodes are expanded; the only persistent outline state.
     private var expanded: Set<NodeID> = []
+    /// The revealed selection path (app#22): these nodes materialize as
+    /// rows even when they sort beyond the per-level cap, so a treemap
+    /// click is ALWAYS visible in the sidebar. Replaced on each reveal.
+    private var pinned: Set<NodeID> = []
+    /// Parents the user explicitly un-truncated by clicking their
+    /// "…and N more" row (app#22).
+    private var uncapped: Set<NodeID> = []
     private var model: EngineModel?
     /// Which byte count the rows display/sort by (set by AppState).
     /// Plain var, not @Published — AppState always calls reload() after.
@@ -604,6 +618,8 @@ final class OutlineStore: ObservableObject {
     func attach(model: EngineModel) {
         self.model = model
         expanded = []
+        pinned = []
+        uncapped = []
         if model.root.isValid { expanded.insert(model.root) }
         reload()
     }
@@ -649,11 +665,21 @@ final class OutlineStore: ObservableObject {
 
     /// Expand every ANCESTOR of a node (dropLast excludes the node itself
     /// — revealing must not also expand the target) so a treemap-click
-    /// selection becomes visible in the sidebar (APP-COUPLE-2).
+    /// selection becomes visible in the sidebar (APP-COUPLE-2). The whole
+    /// path is also PINNED: expansion alone cannot defeat the per-level
+    /// cap, and a selection that sorts below an ancestor's 14th child
+    /// would otherwise stay invisible (app#22, the deno-cli field report).
     func reveal(path: [NodeID]) {
+        pinned = Set(path)
         for ancestor in path.dropLast() {
             expanded.insert(ancestor)
         }
+        reload()
+    }
+
+    /// Remove the cap for one parent (its "…and N more" row was clicked).
+    func uncap(_ node: NodeID) {
+        uncapped.insert(node)
         reload()
     }
 
@@ -698,20 +724,52 @@ final class OutlineStore: ObservableObject {
         // Engine-side sort, largest first, in the metric the rows display.
         let sort: ChildSort = metric == .physical ? .physicalSize : .size
         let children = model.children(of: node, sort: sort, descending: true)
-        for child in children.prefix(Self.perLevelLimit) {
+        let cap = uncapped.contains(node) ? children.count : Self.perLevelLimit
+        for child in children.prefix(cap) {
             appendRows(node: child, depth: depth + 1, model: model, into: &out)
         }
-        // Root level only: collapse the overflow into the "…and N more,
-        // X GB" footer instead of an endless list. The design accepts the
-        // O(tail) info calls here because the root's child count is small.
-        if node == model.root, children.count > Self.perLevelLimit {
-            let tail = children.dropFirst(Self.perLevelLimit)
-            let bytes = tail.reduce(UInt64(0)) { acc, id in
-                acc + ((try? model.info(id)).map(self.bytes(of:)) ?? 0)
+        // Pinned nodes (the revealed selection path) materialize even
+        // beyond the cap — after the top-N, still in engine sort order
+        // relative to each other (app#22).
+        let overflow = children.dropFirst(cap)
+        var hiddenCount = 0
+        for child in overflow {
+            if pinned.contains(child) {
+                appendRows(node: child, depth: depth + 1, model: model, into: &out)
+            } else {
+                hiddenCount += 1
             }
-            rootTail = TailSummary(count: tail.count, bytes: bytes)
-        } else if node == model.root {
-            rootTail = nil
+        }
+        if node == model.root {
+            // Root level: collapse the overflow into the "…and N more,
+            // X GB" footer instead of an endless list. The design accepts
+            // the O(tail) info calls because the root's child count is
+            // small.
+            if hiddenCount > 0 {
+                let bytes = overflow.filter { !pinned.contains($0) }
+                    .reduce(UInt64(0)) { acc, id in
+                        acc + ((try? model.info(id)).map(self.bytes(of:)) ?? 0)
+                    }
+                rootTail = TailSummary(count: hiddenCount, bytes: bytes)
+            } else {
+                rootTail = nil
+            }
+        } else if hiddenCount > 0 {
+            // Inner levels: a count-only "…and N more" row (no per-node
+            // info calls — unlike the root summary, an inner level can be
+            // a 50k-child directory). Clicking it uncaps this parent.
+            out.append(
+                Row(
+                    node: node,
+                    depth: depth + 1,
+                    name: "",
+                    size: 0,
+                    percentOfRoot: 0,
+                    category: .other,
+                    isDirectory: false,
+                    hasChildren: false,
+                    isExpanded: false,
+                    tailCount: hiddenCount))
         }
     }
 

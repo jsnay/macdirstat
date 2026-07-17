@@ -197,6 +197,54 @@ final class EngineIntegrationTests: XCTestCase {
         XCTAssertGreaterThan(state.layoutGeneration, gen)
     }
 
+    /// The app#22 field bug: a treemap selection below an ancestor's
+    /// 14th-largest child must still get a sidebar row. Builds a level
+    /// with 20 children, reveals a below-cap one, and checks pinning,
+    /// the inner "…and N more" indicator, and uncapping.
+    @MainActor
+    func testOutlineRevealDefeatsPerLevelCap() throws {
+        let tree = TempTree("outline")
+        // 20 children under "big", sizes strictly descending so the sort
+        // order is deterministic: child00 largest … child19 smallest.
+        for i in 0..<20 {
+            tree.file(String(format: "big/child%02d/f.bin", i), 40_000 - i * 1_000)
+        }
+        let (_, model) = scanToCompletion(tree)
+
+        let outline = OutlineStore()
+        outline.metric = .logical
+        outline.attach(model: model)
+        let big = model.children(of: model.root).first { model.name(of: $0) == "big" }!
+
+        // Expanded but unrevealed: the level truncates at 14 with an
+        // inner tail row counting the hidden 6.
+        outline.setExpanded(big, true)
+        XCTAssertNil(
+            outline.rows.first { model.name(of: $0.node) == "child17" && $0.tailCount == 0 },
+            "below-cap child must start truncated")
+        let tail = outline.rows.first { $0.tailCount > 0 }
+        XCTAssertEqual(tail?.tailCount, 6)
+        XCTAssertEqual(tail?.node, big)
+
+        // Reveal a below-cap child (as a treemap click does): its row
+        // must materialize even though it sorts 18th of 20.
+        let needle = model.children(of: big).first { model.name(of: $0) == "child17" }!
+        outline.reveal(path: model.pathToRoot(needle))
+        XCTAssertNotNil(
+            outline.rows.first { $0.node == needle },
+            "revealed selection must be visible past the cap")
+        // The tail count excludes the pinned row.
+        XCTAssertEqual(outline.rows.first { $0.tailCount > 0 }?.tailCount, 5)
+
+        // Uncapping the parent materializes all 20 and drops the tail row.
+        outline.uncap(big)
+        let childRows = outline.rows.filter { row in
+            row.tailCount == 0 && model.name(of: row.node).hasPrefix("child")
+        }
+        XCTAssertEqual(childRows.count, 20)
+        XCTAssertNil(outline.rows.first { $0.tailCount > 0 })
+    }
+
     /// Cleanup end-to-end: stage a file, commit, assert the engine
     /// reconciled. CI-tolerant about whether the Trash actually accepts it.
     @MainActor
